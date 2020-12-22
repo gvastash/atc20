@@ -12,6 +12,7 @@
 #include <random>
 #include <list>
 #include <string>
+#include <algorithm>
 
 FILE* log_dest =
 stderr;
@@ -423,6 +424,46 @@ struct random_walk : strategy<P> {
         }
     }
 };
+
+struct less_key {
+    const order_info& order_i;
+    const graph_summary& gs;
+    const int w;
+
+    less_key(const order_info& _order_i, const graph_summary& _gs, int _w) : order_i(_order_i), gs(_gs), w(_w) {
+
+    }
+
+    bool operator() (const int u, const int v)  const {
+        long long int from_u = gs.len[w][order_i.w[u]];
+        long long int to_u = gs.len[order_i.w[u]][order_i.z[u]];
+
+        long long int from_v = gs.len[w][order_i.w[v]];
+        long long int to_v = gs.len[order_i.w[v]][order_i.z[v]];
+
+        double du = (double)from_u + sqrt(to_u);
+        double dv = (double)from_v + sqrt(to_v);
+
+        /*
+        if (gs.len[w][order_i.w[u]] < gs.len[w][order_i.w[v]]) {
+            return true;
+        }
+        if (gs.len[w][order_i.w[u]] > gs.len[w][order_i.w[v]]) {
+            return false;
+        }
+        */
+
+        if (du < dv) {
+            return true;
+        }
+        if (du > dv) {
+            return false;
+        }
+
+        return u < v;
+    }
+};
+
 struct transport_only_0 : strategy<B> {
     std::set<size_t> assigned_order;
     transport_only_0(const B& b, const graph_summary& gs) :
@@ -452,16 +493,22 @@ struct transport_only_0 : strategy<B> {
                     continue;
                 }
             }
-            std::set<size_t> unassigned_order;
+
+            std::vector<size_t> unassigned_order;
             for (size_t i = 0; i < order_i.N_order; ++i)
                 if (assigned_order.count(order_i.id[i]) == 0)
-                    unassigned_order.insert(i);
-            if (unassigned_order.size() > 0) {
+                    unassigned_order.push_back(i);
+
+            sort(unassigned_order.begin(), unassigned_order.end(), less_key(order_i, gs, ev_i.c[n].u));
+
+            int i = 0;
+            if (i < unassigned_order.size()) {
                 size_t count = 0;
                 std::vector<tuple<size_t, size_t, size_t>> assign_order;
-                while (!unassigned_order.empty() && count++ < EV.N_trans_max) {
-                    const size_t order_index = *(unassigned_order.begin());
-                    unassigned_order.erase(unassigned_order.begin());
+                while (i < unassigned_order.size() && count++ < EV.N_trans_max) {
+                    const size_t order_index = unassigned_order[i];
+                    i += 1;
+
                     const size_t from = order_i.w[order_index];
                     const size_t to = order_i.z[order_index];
                     assign_order.emplace_back(from, to, order_i.id[order_index]);
@@ -563,10 +610,13 @@ int main() {
     string command_per_turn;
     vector<pair<double, double>> scores; scores.reserve(N_solution);
     for (size_t n = 0; n < N_solution; ++n) {
-        // str.reset(new all_stay<B>(prob, gs));
+         //str.reset(new all_stay<B>(prob, gs));
         // str.reset(new random_walk<B>(prob, gs));
         str.reset(new transport_only_0(prob, gs));
         str->initialize();
+
+        set<int> picked;
+        set<int> dropped;
         for (size_t t = 0; t < prob.T_max; ++t) {
             grid_i.load(cin);
             ev_i.load(cin);
@@ -575,12 +625,41 @@ int main() {
             command_per_turn = str->dequeue(ev_i);
             auto command_list = split_command(command_per_turn);
             cout << command_per_turn << flush;
+            //cerr << command_per_turn << flush;
+            {
+                int left = 0;
+
+                set<int> currentlyPicked;
+                for (int i = 0; i < order_i.N_order; i++) {
+                    if (!order_i.state[i]) {
+                        left += 1;
+                        continue;
+                    }
+                    currentlyPicked.insert(order_i.id[i]);
+                }
+
+                for (auto id : picked) {
+                    if (currentlyPicked.count(id)) {
+                        continue;
+                    }
+                    if (dropped.count(id)) {
+                        cerr << "dup " << id << endl;
+                    }
+                    dropped.insert(id);
+                }
+
+                picked = currentlyPicked;
+
+                cerr << left << "/" << picked.size() << "/" << dropped.size() << endl;
+            }
+
         }
         grid_i.load(cin);
         ev_i.load(cin);
         order_i.load(cin);
         double S_trans, S_ele;
         cin >> S_trans >> S_ele;
+        cerr << S_trans << " " << S_ele << endl;
     }
     return 0;
 }
