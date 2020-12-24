@@ -14,6 +14,10 @@
 #include <string>
 #include <algorithm>
 
+using namespace std;
+
+typedef long long int i64;
+
 FILE* log_dest =
 stderr;
 using namespace std;
@@ -377,6 +381,7 @@ struct strategy :public P {
         return ret;
     }
     void enqueue(size_t EV_index, const string& cmd) {
+        //cerr << EV_index << ": " << cmd << endl;
         command_queue[EV_index].push_back(cmd);
     }
     void enqueue(size_t EV_index, const string& cmd, size_t repeat) {
@@ -466,8 +471,9 @@ struct less_key {
 
 struct transport_only_0 : strategy<B> {
     std::set<size_t> assigned_order;
-    transport_only_0(const B& b, const graph_summary& gs) :
-        strategy<B>(b, gs) {}
+    int tt;
+    transport_only_0(const B& b, const graph_summary& gs, int qt) :
+        strategy<B>(b, gs), tt(qt) {}
     void initialize() {
         strategy::initialize();
         assigned_order.clear();
@@ -476,7 +482,7 @@ struct transport_only_0 : strategy<B> {
         for (size_t n = 0; n < ev_i.N_EV; ++n) {
             if (!is_free(n)) continue;
             const size_t current = ev_i.c[n].u;
-            const size_t safety_energy = EV.Delta_EV_move * 50;
+            const size_t safety_energy = EV.Delta_EV_move * (tt % 2 ? 50 : 100);
             if (auto [_, pos] = nearest_nanogrid(current, gs); current != pos) {
                 const size_t len_to_charge = gs.len[current][pos];
                 const int expected_energy = ev_i.c[n].charge - len_to_charge * EV.Delta_EV_move;
@@ -489,7 +495,7 @@ struct transport_only_0 : strategy<B> {
             }
             else {
                 if (ev_i.c[n].charge < safety_energy) {
-                    enqueue(n, strprintf("charge_from_grid %zu", EV.V_EV_max), ceil(1.0 * (safety_energy - ev_i.c[n].charge) / EV.V_EV_max));
+                    enqueue(n, strprintf("charge_from_grid %zu", EV.V_EV_max), ceil(1.0 * min(EV.C_EV_max, (safety_energy - ev_i.c[n].charge)) / EV.V_EV_max));
                     continue;
                 }
             }
@@ -517,8 +523,18 @@ struct transport_only_0 : strategy<B> {
                 auto path = find_transit_path_greedy(current, assign_order, gs);
                 vector<size_t> transit; transit.reserve(path.size() + 1);
                 const size_t expected_transit_length = transit_length(path, gs.len) + gs.len[current][path[0].first];
-                if (ev_i.c[n].charge < (expected_transit_length + gs.cover_radius) * EV.Delta_EV_move) {
-                    enqueue(n, strprintf("charge_from_grid %zu", EV.V_EV_max), ((expected_transit_length + gs.cover_radius) * EV.Delta_EV_move - ev_i.c[n].charge) / EV.V_EV_max + 1);
+
+                size_t radius = tt % 2 ? gs.cover_radius : 0;
+                /*
+                if (!path.empty()) {
+                    for (size_t j = 0; j < gs.nanogrid_pos.size(); ++j) {
+                        radius = min(radius, gs.len[0][j]);
+                    }
+                }
+                */
+
+                if (ev_i.c[n].charge < (expected_transit_length + radius) * EV.Delta_EV_move) {
+                    enqueue(n, strprintf("charge_from_grid %zu", EV.V_EV_max), (min(EV.C_EV_max, (expected_transit_length + radius) * EV.Delta_EV_move - ev_i.c[n].charge)) / EV.V_EV_max + 1);
                 }
                 size_t cur = current;
                 for (auto [to, pick_up] : path) {
@@ -534,6 +550,192 @@ struct transport_only_0 : strategy<B> {
         }
     }
 };
+
+struct GreedyTransportStrategy : strategy<B> {
+public:
+    set<i64> AssignedOrders;
+
+    vector<i64> EvTargetOrder;
+    vector<i64> EvTargetGrid;
+
+    i64 tt;
+
+public:
+    GreedyTransportStrategy(const B& b, const graph_summary& gs, int qt) :
+        strategy<B>(b, gs), tt(qt) {}
+
+    void initialize() {
+        strategy::initialize();
+        AssignedOrders.clear();
+        EvTargetOrder.resize(EV.N_EV, -1);
+        EvTargetGrid.resize(EV.N_EV, -1);
+    }
+
+    void command(const grid_info&, const EV_info& ev_i, const order_info& order_i) {
+        map<i64, i64> orders;
+        for (i64 i = 0; i < order_i.N_order; i++) {
+            orders[order_i.id[i]] = i;
+        }
+
+        //for (i64 i = 0; i < order_i.N_order; i++) {
+        //    cerr << order_i.id[i] << "/" << order_i.state[i] << endl;
+        //}
+
+
+        for (size_t evId = 0; evId < ev_i.N_EV; ++evId) {
+            //if (evId) {
+            //    enqueue(evId, "stay");
+            //    continue;
+            //}
+
+            auto& ev = ev_i.c[evId];
+
+            //cerr << command_queue[evId].size() << endl;
+
+            //for (i64 i = 0; i < ev.N_order; i++) {
+            //    cerr << ev.o[i] << "/" << ev.N_order << endl;
+            //}
+
+            if (ev.u != ev.v) {
+                if (EvTargetGrid[evId] != ev.u && EvTargetGrid[evId] != ev.v) {
+                    cerr << "Ev " << evId << " on the edge " << ev.u << "-" << ev.v << " cant reach " << EvTargetGrid[evId] << endl;
+                    throw 1;
+                }
+                enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
+                continue;
+            }
+
+            if (EvTargetOrder[evId] >= 0 && !orders.count(EvTargetOrder[evId])) {
+                //cerr << "delivered" << endl;
+                EvTargetOrder[evId] = -1;
+                EvTargetGrid[evId] = -1;
+            }
+
+            if (EvTargetGrid[evId] == ev.u) {
+                EvTargetGrid[evId] = -1;
+            }
+
+            if (ev.charge < EV.Delta_EV_move) {
+                cerr << "low charge " << evId << endl;
+            }
+
+            if (EvTargetGrid[evId] < 0 && EvTargetOrder[evId] < 0 && ev.charge < 100 * EV.Delta_EV_move) {// EV.C_EV_max) {
+                i64 closestDist = 1e18;
+                i64 closestGrid = -1;
+
+                for (auto grid : gs.nanogrid_pos) {
+                    i64 dist = gs.len[ev.u][grid];
+                    if (closestDist > dist) {
+                        closestDist = dist;
+                        closestGrid = grid;
+                    }
+                }
+
+                if (closestGrid == ev.u) {
+                    enqueue(evId, "charge_from_grid " + to_string(min(EV.V_EV_max, EV.C_EV_max - ev.charge)));
+                    //cerr << "charge_from_grid" << endl;
+                    continue;
+                }
+
+                EvTargetGrid[evId] = gs.next[ev.u][closestGrid];
+                enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
+                continue;
+            }
+
+            i64 carringOrderId = -1;
+            for (i64 i = 0; i < ev.N_order; i++) {
+                //if (!orders.count(ev.o[i])) {
+                //    continue;
+                //}
+                //cerr << order_i.id[ev.o[i]] << "/" << ev.o[i] << "/" << ev.N_order << endl;
+
+
+                if (EvTargetOrder[evId] == ev.o[i] + 1) { //order_i.id[orders[ev.o[i]]]) {
+                    carringOrderId = ev.o[i] + 1;
+                }
+            }
+
+
+            /*
+            if (ev.N_order) {
+                cerr << "carringOrderId = " << carringOrderId << endl;
+                cerr << "EvTargetOrder[evId] = " << EvTargetOrder[evId] << endl;
+                enqueue(evId, "stay");
+                continue;
+            }
+            */
+
+            //cerr << "carringOrderId = " << carringOrderId << endl;
+
+
+            if (carringOrderId >= 0) {
+                EvTargetGrid[evId] = gs.next[ev.u][order_i.z[orders[carringOrderId]]];
+
+                //if (ev.N_order > 1) {
+                //    cerr << ev.o.front() << " | " << ev.u << " -> " << order_i.z[orders[ev.o.front()]] << endl; // EvTargetGrid[evId] << endl;
+                //}
+            }
+            else {
+                if (EvTargetOrder[evId] < 0) {
+                    i64 closestDist = 1e18;
+                    i64 closestOrderId = -1;
+
+                    for (i64 i = 0; i < order_i.N_order; i++) {
+                        if (order_i.state[i]) {
+                            continue;
+                        }
+
+                        auto orderId = order_i.id[i];
+                        if (AssignedOrders.count(orderId)) {
+                            continue;
+                        }
+
+                        i64 dist = gs.len[ev.u][order_i.w[i]];
+                        if (closestDist > dist) {
+                            closestDist = dist;
+                            closestOrderId = orderId;
+                        }
+                    }
+
+                    if (closestOrderId >= 0) {
+                        EvTargetOrder[evId] = closestOrderId;
+                        AssignedOrders.insert(closestOrderId);
+                        //cerr << "EV " << evId << " -> " << closestOrderId << endl;
+                    }
+                }
+
+                if (EvTargetOrder[evId] < 0) {
+                    EvTargetGrid[evId] = ev.u;
+                }
+                else {
+                    EvTargetGrid[evId] = gs.next[ev.u][order_i.w[orders[EvTargetOrder[evId]]]];
+                    //cerr << EvTargetOrder[evId] << " = " << order_i.id[orders[EvTargetOrder[evId]]] << endl;
+
+                    if (orders[EvTargetOrder[evId]] < order_i.N_order && !order_i.state[orders[EvTargetOrder[evId]]] && ev.u == order_i.w[orders[EvTargetOrder[evId]]]) {
+                        //cerr << evId << " pickup " + to_string(EvTargetOrder[evId]) << endl;
+                        //cerr << "state = " << order_i.state[orders[EvTargetOrder[evId]]] << endl;
+                        enqueue(evId, "pickup " + to_string(EvTargetOrder[evId]));
+                        continue;
+                    }
+                }
+            }
+
+            //cerr << EvTargetOrder[evId] << endl;
+
+            if (EvTargetGrid[evId] < 0 || EvTargetGrid[evId] == ev.u) {
+                if (ev.N_order) {
+                    //cerr << "stay" << endl;
+                }
+                enqueue(evId, "stay");
+                continue;
+            }
+
+            i64 len = gs.len[ev.u][EvTargetGrid[evId]];
+            enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
+        }
+    }
+};
+
 vector<string> split_command(const string& command_pack) {
     vector<string> ret;
     stringstream reader(command_pack);
@@ -612,7 +814,8 @@ int main() {
     for (size_t n = 0; n < N_solution; ++n) {
          //str.reset(new all_stay<B>(prob, gs));
         // str.reset(new random_walk<B>(prob, gs));
-        str.reset(new transport_only_0(prob, gs));
+        // str.reset(new transport_only_0(prob, gs, n + 1));
+        str.reset(new GreedyTransportStrategy(prob, gs, n + 1));
         str->initialize();
 
         set<int> picked;
@@ -626,6 +829,7 @@ int main() {
             auto command_list = split_command(command_per_turn);
             cout << command_per_turn << flush;
             //cerr << command_per_turn << flush;
+
             {
                 int left = 0;
 
@@ -650,9 +854,10 @@ int main() {
 
                 picked = currentlyPicked;
 
-                cerr << left << "/" << picked.size() << "/" << dropped.size() << endl;
+                if (t == prob.T_max - 1) {
+                    cerr << left << "/" << picked.size() << "/" << dropped.size() << endl;
+                }
             }
-
         }
         grid_i.load(cin);
         ev_i.load(cin);
