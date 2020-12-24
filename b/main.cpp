@@ -585,6 +585,11 @@ public:
             orders[order_i.id[i]] = i;
         }
 
+        map<i64, i64> grids;
+        //for (i64 i = 0; i < grid.N_grid; i++) {
+        //    grids[grid_i.x[i]] += max(0, grid_i.pw_actual[i]);
+        //}
+
         for (i64 evId = 0; evId < ev_i.N_EV; evId++) {
             {
                 auto it = EvTargetOrder[evId].begin();
@@ -761,17 +766,18 @@ public:
             // random charge
             {
                 i64 charge = 0;
+                i64 gridId = -1;
+
                 for (i64 i = 0; i < grid_i.N_grid; i++) {
                     if (grid_i.x[i] != ev.u) {
                         continue;
                     }
+                    gridId = i;
                     charge = grid_i.y[i];
                 }
 
                 /*
-                if (charge < grid.C_grid_max / 4 && ev.charge > EV.C_EV_max / 2) {
-                    cerr << "random uncharge" << endl;
-
+                if (gridId >= 0 && charge < grid.C_grid_max / 1000 && ev.charge > EV.C_EV_max * 3 / 4) {
                     enqueue(evId, "charge_to_grid " + to_string(EV.V_EV_max));
                     continue;
                 }
@@ -780,9 +786,11 @@ public:
                 if (charge > grid.C_grid_max / 4) {
                     charge = min(charge, (i64)EV.V_EV_max);
                     charge = min(charge, (i64)EV.C_EV_max - (i64)ev.charge);
+                    //charge = min(charge, (i64)grid.V_grid_max - grids[grid_i.x[gridId]]);
                     //charge = min(charge, (i64)EV.Delta_EV_move * (i64)(T_max - T_last) - (i64)ev.charge);
                     if (charge > 0) {
                         //cerr << "random charge" << endl;
+                        //grids[grid_i.x[gridId]] += charge;
                         enqueue(evId, "charge_from_grid " + to_string(charge));
                         continue;
                     }
@@ -983,8 +991,13 @@ int main() {
         str.reset(new GreedyTransportStrategy(prob, gs, n + 1));
         str->initialize();
 
+        i64 pwExcess = 0;
+        i64 pwBuy = 0;
+
         set<int> picked;
         set<int> dropped;
+        set<int> left;
+
         for (size_t t = 0; t < prob.T_max; ++t) {
             grid_i.load(cin);
             ev_i.load(cin);
@@ -995,15 +1008,19 @@ int main() {
             cout << command_per_turn << flush;
             //cerr << command_per_turn << flush;
 
-            {
-                int left = 0;
+            for (i64 i = 0; i < grid_i.N_grid; i++) {
+                pwExcess += grid_i.pw_excess[i];
+                pwBuy += grid_i.pw_buy[i];
+            }
 
+            {
                 set<int> currentlyPicked;
                 for (int i = 0; i < order_i.N_order; i++) {
                     if (!order_i.state[i]) {
-                        left += 1;
+                        left.insert(order_i.id[i]);
                         continue;
                     }
+                    left.erase(order_i.id[i]);
                     currentlyPicked.insert(order_i.id[i]);
                 }
 
@@ -1011,19 +1028,16 @@ int main() {
                     if (currentlyPicked.count(id)) {
                         continue;
                     }
-                    if (dropped.count(id)) {
-                        cerr << "dup " << id << endl;
-                    }
                     dropped.insert(id);
                 }
 
                 picked = currentlyPicked;
-
-                if (t == prob.T_max - 1) {
-                    cerr << left << "/" << picked.size() << "/" << dropped.size() << endl;
-                }
             }
         }
+
+        cerr << left.size() << "/" << picked.size() << "/" << dropped.size() << endl;
+        cerr << pwExcess << "/" << pwBuy << endl;
+
         grid_i.load(cin);
         ev_i.load(cin);
         order_i.load(cin);
