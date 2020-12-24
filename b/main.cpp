@@ -557,6 +557,7 @@ public:
 
     vector<i64> EvTargetOrder;
     vector<i64> EvTargetGrid;
+    vector<i64> EvChargeGrid;
 
     i64 tt;
 
@@ -569,32 +570,136 @@ public:
         AssignedOrders.clear();
         EvTargetOrder.resize(EV.N_EV, -1);
         EvTargetGrid.resize(EV.N_EV, -1);
+        EvChargeGrid.resize(EV.N_EV, -1);
     }
 
-    void command(const grid_info&, const EV_info& ev_i, const order_info& order_i) {
+    void command(const grid_info& grid_i, const EV_info& ev_i, const order_info& order_i) {
         map<i64, i64> orders;
         for (i64 i = 0; i < order_i.N_order; i++) {
             orders[order_i.id[i]] = i;
         }
 
-        //for (i64 i = 0; i < order_i.N_order; i++) {
-        //    cerr << order_i.id[i] << "/" << order_i.state[i] << endl;
-        //}
+        for (i64 evId = 0; evId < ev_i.N_EV; evId++) {
+            if (EvTargetOrder[evId] >= 0 && !orders.count(EvTargetOrder[evId])) {
+                EvTargetOrder[evId] = -1;
+                EvTargetGrid[evId] = -1;
+            }
+        }
+
+        /*
+        map<i64, set<pair<i64, i64>, less<pair<i64, i64>>>> closestEvsToOrder;
+        for (i64 i = 0; i < order_i.N_order; i++) {
+            if (order_i.state[i]) {
+                continue;
+            }
+
+            i64 orderId = order_i.id[i];
+            if (AssignedOrders.count(orderId)) {
+                continue;
+            }
+
+            for (i64 evId = 0; evId < ev_i.N_EV; evId++) {
+                if (EvTargetOrder[evId] >= 0) {
+                    continue;
+                }
+
+                i64 shift = ev_i.c[evId].u == ev_i.c[evId].v ? 0 : (ev_i.c[evId].u == EvTargetGrid[evId] ? ev_i.c[evId].dist_from_u : ev_i.c[evId].dist_to_v);
+                i64 dest = ev_i.c[evId].u == ev_i.c[evId].v ? ev_i.c[evId].u : EvTargetGrid[evId];
+                closestEvsToOrder[orderId].insert({ shift + gs.len[dest][order_i.w[i]], evId });
+            }
+        }
+
+        set<pair<i64, i64>> orderLength;
+        for (i64 i = 0; i < order_i.N_order; i++) {
+            if (order_i.state[i]) {
+                continue;
+            }
+
+            i64 orderId = order_i.id[i];
+            if (AssignedOrders.count(orderId)) {
+                continue;
+            }
+
+            i64 len = gs.len[order_i.w[i]][order_i.z[i]];
+            orderLength.insert({ len, orderId });
+        }
+
+        for (auto o : orderLength) {
+            i64 orderId = o.second;
+
+            if (closestEvsToOrder[orderId].empty()) {
+                continue;
+            }
+
+
+            i64 evId = closestEvsToOrder[orderId].begin()->second;
+
+            //cerr << orderId << " assigned to " << evId << endl;
+
+            EvTargetOrder[evId] = orderId;
+            AssignedOrders.insert(orderId);
+
+            for (i64 i = 0; i < order_i.N_order; i++) {
+                if (order_i.state[i]) {
+                    continue;
+                }
+
+                i64 orderId = order_i.id[i];
+                if (AssignedOrders.count(orderId)) {
+                    continue;
+                }
+
+                i64 shift = ev_i.c[evId].u == ev_i.c[evId].v ? 0 : (ev_i.c[evId].u == EvTargetGrid[evId] ? ev_i.c[evId].dist_from_u : ev_i.c[evId].dist_to_v);
+                i64 dest = ev_i.c[evId].u == ev_i.c[evId].v ? ev_i.c[evId].u : EvTargetGrid[evId];
+                closestEvsToOrder[orderId].erase({ gs.len[dest][order_i.w[i]], evId });
+            }
+        }
+        */
+
+        set<pair<i64, pair<i64, i64>>> ordersQueue;
+        for (i64 i = 0; i < order_i.N_order; i++) {
+            if (order_i.state[i]) {
+                continue;
+            }
+
+            i64 orderId = order_i.id[i];
+            if (AssignedOrders.count(orderId)) {
+                continue;
+            }
+
+            for (i64 evId = 0; evId < ev_i.N_EV; evId++) {
+                if (EvTargetOrder[evId] >= 0) {
+                    continue;
+                }
+
+                i64 shift = ev_i.c[evId].u == ev_i.c[evId].v ? 0 : (ev_i.c[evId].u == EvTargetGrid[evId] ? ev_i.c[evId].dist_from_u : ev_i.c[evId].dist_to_v);
+                i64 dest = ev_i.c[evId].u == ev_i.c[evId].v ? ev_i.c[evId].u : EvTargetGrid[evId];
+                ordersQueue.insert({ shift + (i64)gs.len[dest][order_i.w[i]], {evId, orderId} });
+            }
+        }
+
+        for (auto o : ordersQueue) {
+            i64 evId = o.second.first;
+            i64 orderId = o.second.second;
+
+            if (AssignedOrders.count(orderId)) {
+                continue;
+            }
+
+            if (EvTargetOrder[evId] >= 0) {
+                continue;
+            }
+
+            //cerr << orderId << " assigned to " << evId << endl;
+
+            EvTargetOrder[evId] = orderId;
+            AssignedOrders.insert(orderId);
+        }
+
 
 
         for (size_t evId = 0; evId < ev_i.N_EV; ++evId) {
-            //if (evId) {
-            //    enqueue(evId, "stay");
-            //    continue;
-            //}
-
             auto& ev = ev_i.c[evId];
-
-            //cerr << command_queue[evId].size() << endl;
-
-            //for (i64 i = 0; i < ev.N_order; i++) {
-            //    cerr << ev.o[i] << "/" << ev.N_order << endl;
-            //}
 
             if (ev.u != ev.v) {
                 if (EvTargetGrid[evId] != ev.u && EvTargetGrid[evId] != ev.v) {
@@ -606,7 +711,6 @@ public:
             }
 
             if (EvTargetOrder[evId] >= 0 && !orders.count(EvTargetOrder[evId])) {
-                //cerr << "delivered" << endl;
                 EvTargetOrder[evId] = -1;
                 EvTargetGrid[evId] = -1;
             }
@@ -619,7 +723,8 @@ public:
                 cerr << "low charge " << evId << endl;
             }
 
-            if (EvTargetGrid[evId] < 0 && EvTargetOrder[evId] < 0 && ev.charge < 100 * EV.Delta_EV_move) {// EV.C_EV_max) {
+            /*
+            if (EvTargetGrid[evId] < 0 && EvTargetOrder[evId] < 0 && ev.charge < 100 * EV.Delta_EV_move) {
                 i64 closestDist = 1e18;
                 i64 closestGrid = -1;
 
@@ -633,7 +738,6 @@ public:
 
                 if (closestGrid == ev.u) {
                     enqueue(evId, "charge_from_grid " + to_string(min(EV.V_EV_max, EV.C_EV_max - ev.charge)));
-                    //cerr << "charge_from_grid" << endl;
                     continue;
                 }
 
@@ -641,41 +745,21 @@ public:
                 enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
                 continue;
             }
+            */
 
             i64 carringOrderId = -1;
             for (i64 i = 0; i < ev.N_order; i++) {
-                //if (!orders.count(ev.o[i])) {
-                //    continue;
-                //}
-                //cerr << order_i.id[ev.o[i]] << "/" << ev.o[i] << "/" << ev.N_order << endl;
-
-
-                if (EvTargetOrder[evId] == ev.o[i] + 1) { //order_i.id[orders[ev.o[i]]]) {
+                if (EvTargetOrder[evId] == ev.o[i] + 1) {
                     carringOrderId = ev.o[i] + 1;
                 }
             }
 
 
-            /*
-            if (ev.N_order) {
-                cerr << "carringOrderId = " << carringOrderId << endl;
-                cerr << "EvTargetOrder[evId] = " << EvTargetOrder[evId] << endl;
-                enqueue(evId, "stay");
-                continue;
-            }
-            */
-
-            //cerr << "carringOrderId = " << carringOrderId << endl;
-
-
             if (carringOrderId >= 0) {
                 EvTargetGrid[evId] = gs.next[ev.u][order_i.z[orders[carringOrderId]]];
-
-                //if (ev.N_order > 1) {
-                //    cerr << ev.o.front() << " | " << ev.u << " -> " << order_i.z[orders[ev.o.front()]] << endl; // EvTargetGrid[evId] << endl;
-                //}
             }
             else {
+                /*
                 if (EvTargetOrder[evId] < 0) {
                     i64 closestDist = 1e18;
                     i64 closestOrderId = -1;
@@ -700,37 +784,132 @@ public:
                     if (closestOrderId >= 0) {
                         EvTargetOrder[evId] = closestOrderId;
                         AssignedOrders.insert(closestOrderId);
-                        //cerr << "EV " << evId << " -> " << closestOrderId << endl;
                     }
                 }
+                */
 
                 if (EvTargetOrder[evId] < 0) {
                     EvTargetGrid[evId] = ev.u;
                 }
                 else {
                     EvTargetGrid[evId] = gs.next[ev.u][order_i.w[orders[EvTargetOrder[evId]]]];
-                    //cerr << EvTargetOrder[evId] << " = " << order_i.id[orders[EvTargetOrder[evId]]] << endl;
 
                     if (orders[EvTargetOrder[evId]] < order_i.N_order && !order_i.state[orders[EvTargetOrder[evId]]] && ev.u == order_i.w[orders[EvTargetOrder[evId]]]) {
-                        //cerr << evId << " pickup " + to_string(EvTargetOrder[evId]) << endl;
-                        //cerr << "state = " << order_i.state[orders[EvTargetOrder[evId]]] << endl;
                         enqueue(evId, "pickup " + to_string(EvTargetOrder[evId]));
                         continue;
                     }
                 }
             }
 
-            //cerr << EvTargetOrder[evId] << endl;
+            bool saveEnergy = false; // tt % 2 == 0;
 
-            if (EvTargetGrid[evId] < 0 || EvTargetGrid[evId] == ev.u) {
-                if (ev.N_order) {
-                    //cerr << "stay" << endl;
+            // check charge
+            if (true) {
+                i64 len = gs.len[ev.u][EvTargetGrid[evId]];
+
+                i64 closestDist = 1e18;
+                i64 closestGrid = -1;
+
+                for (auto grid : gs.nanogrid_pos) {
+
+                    bool ok = true;
+                    for (i64 i = 0; i < grid_i.N_grid; i++) {
+                        if (grid_i.x[i] != grid) {
+                            continue;
+                        }
+
+                        if (grid_i.y[i] == 0) {
+                            ok = false;
+                        }
+                    }
+
+                    if (!ok && saveEnergy) {
+                        continue;
+                    }
+
+                    i64 dist = gs.len[EvTargetGrid[evId]][grid];
+                    if (closestDist > dist) {
+                        closestDist = dist;
+                        closestGrid = grid;
+                    }
                 }
+
+                if ((len + closestDist + 10) * EV.Delta_EV_move >= ev.charge || ev.u == EvTargetGrid[evId] || EvTargetGrid[evId] == -1) {
+                    i64 closestDist = 1e18;
+                    i64 closestGrid = -1;
+
+                    for (auto grid : gs.nanogrid_pos) {
+
+                        bool ok = true;
+                        for (i64 i = 0; i < grid_i.N_grid; i++) {
+                            if (grid_i.x[i] != grid) {
+                                continue;
+                            }
+
+                            if (grid_i.y[i] == 0) {
+                                ok = false;
+                            }
+                        }
+
+                        if (!ok && saveEnergy) {
+                            continue;
+                        }
+
+                        i64 dist = gs.len[ev.u][grid];
+                        if (closestDist > dist) {
+                            closestDist = dist;
+                            closestGrid = grid;
+                        }
+                    }
+
+                    EvChargeGrid[evId] = closestGrid;
+                }
+            }
+
+            // charge
+            if (EvChargeGrid[evId] >= 0) {
+                if (ev.charge >= EV.C_EV_max) {
+                    EvChargeGrid[evId] = -1;
+                }
+                else {
+                    if (ev.u == EvChargeGrid[evId]) {
+                        i64 chargeNeeded = min(EV.V_EV_max, EV.C_EV_max - ev.charge);
+
+                        //cerr << evId << " charge_from_grid " + to_string(min(EV.V_EV_max, EV.C_EV_max - ev.charge)) << endl;
+                        for (i64 i = 0; i < grid_i.N_grid; i++) {
+                            if (grid_i.x[i] != EvChargeGrid[evId]) {
+                                continue;
+                            }
+                            if (saveEnergy) {
+                                chargeNeeded = min(chargeNeeded, (i64)grid_i.y[i]);
+                            }
+                            //cerr << "current grid #" << grid_i.x[i] << " charge = " << grid_i.y[i] << endl;
+                        }
+
+                        if (chargeNeeded) {
+                            enqueue(evId, "charge_from_grid " + to_string(chargeNeeded));
+                        }
+                        else {
+                            //cerr << "ev #" << evId << " care about charge" << endl;
+                            EvChargeGrid[evId] = -1;
+                            enqueue(evId, "stay");
+                        }
+
+                        continue;
+                    }
+                    else {
+                        EvTargetGrid[evId] = gs.next[ev.u][EvChargeGrid[evId]];
+                        enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
+                        continue;
+                    }
+                }
+            }
+
+            if (EvTargetGrid[evId] == -1 || EvTargetGrid[evId] == ev.u) {
                 enqueue(evId, "stay");
                 continue;
             }
 
-            i64 len = gs.len[ev.u][EvTargetGrid[evId]];
             enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
         }
     }
