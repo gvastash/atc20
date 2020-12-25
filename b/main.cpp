@@ -585,7 +585,7 @@ public:
             orders[order_i.id[i]] = i;
         }
 
-        map<i64, i64> grids;
+        map<i64, i64> gridConsumption;
         //for (i64 i = 0; i < grid.N_grid; i++) {
         //    grids[grid_i.x[i]] += max(0, grid_i.pw_actual[i]);
         //}
@@ -761,7 +761,7 @@ public:
                 EvTargetGrid[evId] = ev.u;
             }
 
-            bool saveEnergy = true; // tt % 2 == 0;
+            bool saveEnergy = tt % 2 == 1;
 
             // random charge
             {
@@ -783,6 +783,12 @@ public:
                 }
                 */
 
+                if (saveEnergy) {
+                    if (gridId >= 0) {
+                        charge = min(charge, (i64)grid.V_grid_max) - gridConsumption[gridId];
+                    }
+                }
+
                 if (charge > grid.C_grid_max / 4) {
                     charge = min(charge, (i64)EV.V_EV_max);
                     charge = min(charge, (i64)EV.C_EV_max - (i64)ev.charge);
@@ -791,6 +797,7 @@ public:
                     if (charge > 0) {
                         //cerr << "random charge" << endl;
                         //grids[grid_i.x[gridId]] += charge;
+                        gridConsumption[gridId] += charge;
                         enqueue(evId, "charge_from_grid " + to_string(charge));
                         continue;
                     }
@@ -832,15 +839,20 @@ public:
                     i64 closestDist = 1e18;
                     i64 closestGrid = -1;
 
-                    for (auto grid : gs.nanogrid_pos) {
+                    for (auto gr : gs.nanogrid_pos) {
 
                         bool ok = true;
                         for (i64 i = 0; i < grid_i.N_grid; i++) {
-                            if (grid_i.x[i] != grid) {
+                            if (grid_i.x[i] != gr) {
                                 continue;
                             }
 
-                            if (grid_i.y[i] == 0) {
+                            //if (grid_i.y[i] == 0) {
+                            //    ok = false;
+                            //}
+
+                            i64 chargeLeft = min((i64)grid_i.y[i], (i64)grid.V_grid_max) - gridConsumption[i];
+                            if (chargeLeft < grid.C_grid_max / 10) {
                                 ok = false;
                             }
                         }
@@ -849,10 +861,10 @@ public:
                             continue;
                         }
 
-                        i64 dist = gs.len[ev.u][grid];
+                        i64 dist = gs.len[ev.u][gr];
                         if (closestDist > dist) {
                             closestDist = dist;
-                            closestGrid = grid;
+                            closestGrid = gr;
                         }
                     }
 
@@ -870,17 +882,25 @@ public:
                         i64 chargeNeeded = min(EV.V_EV_max, EV.C_EV_max - ev.charge);
 
                         //cerr << evId << " charge_from_grid " + to_string(min(EV.V_EV_max, EV.C_EV_max - ev.charge)) << endl;
+                        i64 gridId = -1;
                         for (i64 i = 0; i < grid_i.N_grid; i++) {
                             if (grid_i.x[i] != EvChargeGrid[evId]) {
                                 continue;
                             }
-                            if (saveEnergy) {
-                                chargeNeeded = min(chargeNeeded, (i64)grid_i.y[i]);
-                            }
+                            gridId = i;
+                            break;
                             //cerr << "current grid #" << grid_i.x[i] << " charge = " << grid_i.y[i] << endl;
                         }
 
-                        if (chargeNeeded) {
+                        i64 chargeLeft = min((i64)grid_i.y[gridId], (i64)grid.V_grid_max) - gridConsumption[gridId];
+
+                        if (saveEnergy) {
+                            //chargeNeeded = min(chargeNeeded, (i64)grid_i.y[gridId]);
+                            chargeNeeded = min(chargeNeeded, chargeLeft);
+                        }
+
+                        if (chargeNeeded && chargeLeft > grid.C_grid_max / 10) {
+                            gridConsumption[gridId] += chargeNeeded;
                             enqueue(evId, "charge_from_grid " + to_string(chargeNeeded));
                         }
                         else {
