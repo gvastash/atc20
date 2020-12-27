@@ -422,6 +422,17 @@ public:
         return grid.pw_predict[patternId][tm / grid.N_div];
     }
 
+    i64 GetPw(const grid_info& grid_i, i64 gridId, i64 tm, i64 curTm) {
+        i64 patternId = grid.pattern[gridId];
+        i64 div = T_max / grid.N_div;
+        if (tm / div == (curTm - 1) / div && abs(grid.pw_predict[patternId][tm / div] - grid_i.pw_actual[gridId]) > 100) {
+            //cerr << tm << " " << grid.pw_predict[patternId][tm / div] << "/" << grid_i.pw_actual[gridId] << endl;
+            return grid_i.pw_actual[gridId];
+        }
+        return grid.pw_predict[patternId][tm / div];
+    }
+
+
     pair<i64, i64> CalculateLosses(const grid_info& grid_i, i64 gridId, i64 curTm) {
         i64 sumExcess = 0;
         i64 sumBuy = 0;
@@ -429,7 +440,7 @@ public:
         i64 c = grid_i.y[gridId];
 
         for (i64 tm = curTm; tm < T_max; tm++) {
-            i64 delta = GetPw(grid_i, gridId, tm) - ConsumptionByGrid[gridId][tm];
+            i64 delta = GetPw(grid_i, gridId, tm, curTm) - ConsumptionByGrid[gridId][tm];
 
             i64 excess = delta - min(grid.V_grid_max, grid.C_grid_max - c);
             if (excess < 0) {
@@ -531,31 +542,46 @@ public:
                 buy = 0;
             }
 
+            /*
             if (excess != grid_i.pw_excess[gridId]) {
                 cerr << tm << " excess != grid_i.pw_excess[gridId]" << endl;
                 throw 1;
             }
 
             if (buy != grid_i.pw_buy[gridId]) {
-                for (i64 evId = 0; evId < EV.N_EV; evId++) {
-                    if (!ConsumptionByEv[evId].count(gridId)) {
-                        continue;
-                    }
-                    if (!ConsumptionByEv[evId][gridId].count(tm - 1)) {
-                        continue;
-                    }
-                    cerr << evId << " " << ConsumptionByEv[evId][gridId][tm - 1] << endl;
-                }
-                cerr << grid_i.y[gridId] - PreviousGridCharge[gridId] << "/" << grid_i.pw_actual[gridId] << endl;
-                cerr << buy << " - " << grid_i.pw_buy[gridId] << endl;
-                cerr << grid.V_grid_max << "/" << ConsumptionByGrid[gridId][tm - 1] << "/" << grid_i.pw_actual[gridId] << endl;
-                cerr << gridId << " buy != grid_i.pw_buy[gridId]" << endl;
+                //for (i64 evId = 0; evId < EV.N_EV; evId++) {
+                //    if (!ConsumptionByEv[evId].count(gridId)) {
+                //        continue;
+                //    }
+                //    if (!ConsumptionByEv[evId][gridId].count(tm - 1)) {
+                //        continue;
+                //    }
+                //    cerr << evId << " " << ConsumptionByEv[evId][gridId][tm - 1] << endl;
+                //}
+                //cerr << grid_i.y[gridId] - PreviousGridCharge[gridId] << "/" << grid_i.pw_actual[gridId] << endl;
+                //cerr << buy << " - " << grid_i.pw_buy[gridId] << endl;
+                //cerr << grid.V_grid_max << "/" << ConsumptionByGrid[gridId][tm - 1] << "/" << grid_i.pw_actual[gridId] << endl;
+                //cerr << gridId << " buy != grid_i.pw_buy[gridId]" << endl;
                 throw 1;
             }
+            */
         }
     }
 
     void command(const grid_info& grid_i, const EV_info& ev_i, const order_info& order_i) {
+        //i64 evLimit = EV.N_EV - (EV.N_EV * tt * 3 / 16);
+        //vector<i64> evLimits = {15, 12, 9, 6, 3};
+        vector<i64> evLimits = { 18, 15, 12, 9, 4 };
+        if (evLimits.front() > EV.N_EV) {
+            evLimits.front() = 7;
+        }
+        i64 evLimit = evLimits[tt];
+
+
+        if (!tm) {
+            cerr << tt << ": " << evLimit << "/" << EV.N_EV << endl;
+        }
+
         map<i64, i64> orders;
         for (i64 i = 0; i < order_i.N_order; i++) {
             orders[order_i.id[i]] = i;
@@ -617,6 +643,10 @@ public:
                     continue;
                 }
 
+                //if (evId >= evLimit) {
+                //    continue;
+                //}
+
                 i64 shift = ev_i.c[evId].u == ev_i.c[evId].v ? 0 : (ev_i.c[evId].u == EvTargetGrid[evId] ? ev_i.c[evId].dist_from_u : ev_i.c[evId].dist_to_v);
                 i64 dest = ev_i.c[evId].u == ev_i.c[evId].v ? ev_i.c[evId].u : EvTargetGrid[evId];
                 ordersQueue.insert({ shift + (i64)gs.len[dest][order_i.w[i]], {evId, orderId} });
@@ -648,15 +678,6 @@ public:
             evsQueue.insert({ ev_i.c[evId].charge, evId });
         }
 
-        i64 evLimit = EV.N_EV - (EV.N_EV * tt * 3 / 16);
-        //vector<i64> evLimits = {15, 12, 9, 6, 3};
-        //vector<i64> evLimits = { 15, 13, 11, 9, 7 };
-        //i64 evLimit = evLimits[tt];
-
-        if (!tm) {
-            cerr << tt << ": " << evLimit << endl;
-        }
-
         for (auto te : evsQueue) {
             auto evId = te.second;
             auto& ev = ev_i.c[evId];
@@ -667,6 +688,7 @@ public:
             }
 
             if (ev.u != ev.v) {
+                /*
                 if (EvTargetGrid[evId] != ev.u && EvTargetGrid[evId] != ev.v) {
                     cerr << "Ev " << evId << " on the edge " << ev.u << "-" << ev.v << " cant reach " << EvTargetGrid[evId] << endl;
                     throw 1;
@@ -676,7 +698,7 @@ public:
                     cerr << "low charge on edge " << evId << endl;
                     throw 1;
                 }
-
+                */
 
                 enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
                 continue;
