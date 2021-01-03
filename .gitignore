@@ -6,8 +6,6 @@
 /x64/Debug
 /b/x64/Debug
 /main
-/judge_B
-/generator_B
 /test3.err
 /test2.err
 /test.out
@@ -24,3 +22,7 @@
 /best_full
 /best_0
 /test_2.in
+/generator_A
+/generator_B
+/judge_A
+/judge_B

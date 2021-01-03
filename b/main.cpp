@@ -97,6 +97,7 @@ struct grid_data {
     }
     grid_data& operator=(const grid_data&) = default;
 };
+
 struct EV_data {
     i64 N_EV, C_EV_init, C_EV_max, V_EV_max, N_trans_max, Delta_EV_move;
     std::vector<i64> pos;
@@ -116,55 +117,61 @@ struct EV_data {
         }
     }
 };
-struct A {
-    graph_data graph;
-    grid_data grid;
-    EV_data EV;
-    double gamma;
-    i64 T_max;
-    A(std::istream& src) :graph(src), grid(src), EV(src) {
-        for (i64 i = 0; i < grid.N_grid; ++i) {
-        }
-        src >> gamma;
-        src >> T_max;
-    }
-};
+
 struct B {
     graph_data graph;
     grid_data grid;
     EV_data EV;
-    double p_const_trans;
-    i64 T_last;
-    i64 P_trans;
-    double gamma;
-    int S_ref_ele, S_ref_trans;
-    i64 T_max;
-    B(std::istream& src) :graph(src), grid(src), EV(src) {
-        for (i64 i = 0; i < grid.N_grid; ++i) {
+
+    double p_const_trans = 0.0;
+    i64 T_last = 0;
+    i64 P_trans = 0;
+    double gamma = 0.0;
+    i64 S_ref_ele = 0;
+    i64 S_ref_trans = 0;
+    i64 T_max = 0;
+
+    B(std::istream& src, bool isA = false) :graph(src), grid(src), EV(src) {
+        if (isA) {
+            src >> gamma;
+            src >> T_max;
         }
-        src >> p_const_trans >> T_last;
-        src >> P_trans >> gamma >> S_ref_ele >> S_ref_trans;
-        src >> T_max;
+        else {
+            src >> p_const_trans >> T_last;
+            src >> P_trans >> gamma >> S_ref_ele >> S_ref_trans;
+            src >> T_max;
+        }
     }
 
-    void dump(ostream& ss) {
+    void dump(ostream& ss, bool isA) {
         graph.dump(ss);
         grid.dump(ss);
         EV.dump(ss);
 
-        ss << p_const_trans << " " << T_last << endl;
-        ss << P_trans << " " << gamma << " " << S_ref_ele << " " << S_ref_trans << endl;
-        ss << T_max << endl;
+        if (isA) {
+            ss << gamma << endl;
+            ss << T_max << endl;
+        }
+        else {
+            ss << p_const_trans << " " << T_last << endl;
+            ss << P_trans << " " << gamma << " " << S_ref_ele << " " << S_ref_trans << endl;
+            ss << T_max << endl;
+        }
     }
 };
+
 struct carinfo {
-    i64 charge;
-    i64 u, v, dist_from_u, dist_to_v;
-    i64 N_adj;
+    i64 charge = 0;
+    i64 u = 0;
+    i64 v = 0;
+    i64 dist_from_u = 0;
+    i64 dist_to_v = 0;
+    i64 N_adj = 0;
     std::vector<i64> a;
-    i64 N_order;
+    i64 N_order = 0;
     std::vector<i64> o;
-    void load(std::istream& src, [[maybe_unused]] i64 C_EV_max = 25000, [[maybe_unused]] i64 V = 225, [[maybe_unused]] i64 MaxDegree = 5, [[maybe_unused]] i64 N_trans_max = 4, [[maybe_unused]] i64 T_last = 900) {
+
+    void load(std::istream& src, bool isA, [[maybe_unused]] i64 C_EV_max = 25000, [[maybe_unused]] i64 V = 225, [[maybe_unused]] i64 MaxDegree = 5, [[maybe_unused]] i64 N_trans_max = 4, [[maybe_unused]] i64 T_last = 900) {
         src >> charge;
         src >> u >> v >> dist_from_u >> dist_to_v;
         --u, --v;
@@ -173,14 +180,16 @@ struct carinfo {
             src >> a[i];
             --a[i];
         }
-        src >> N_order; o.resize(N_order);
-        for (i64 i = 0; i < N_order; ++i) {
-            src >> o[i];
-            --o[i];
+        if (!isA) {
+            src >> N_order; o.resize(N_order);
+            for (i64 i = 0; i < N_order; ++i) {
+                src >> o[i];
+                --o[i];
+            }
         }
     }
 
-    void dump(ostream& ss) {
+    void dump(ostream& ss, bool isA) {
         ss << charge << endl;
         ss << u << " " << v << " " << dist_from_u << " " << dist_to_v << endl;
 
@@ -190,11 +199,13 @@ struct carinfo {
         }
         ss << endl;
 
-        ss << N_order << endl;
-        for (i64 i = 0; i < N_order; ++i) {
-            ss << o[i] << " ";
+        if (!isA) {
+            ss << N_order << endl;
+            for (i64 i = 0; i < N_order; ++i) {
+                ss << o[i] << " ";
+            }
+            ss << endl;
         }
-        ss << endl;
     }
 };
 
@@ -226,22 +237,28 @@ struct EV_info {
     EV_info() = default;
     EV_info(i64 N_EV)
         :N_EV(N_EV), c(N_EV) {}
-    void load(std::istream& src) {
+    void load(std::istream& src, bool isA) {
         for (i64 i = 0; i < N_EV; ++i) {
-            c[i].load(src);
+            c[i].load(src, isA);
         }
     }
-    void dump(ostream& ss) {
+    void dump(ostream& ss, bool isA) {
         for (i64 i = 0; i < N_EV; ++i) {
-            c[i].dump(ss);
+            c[i].dump(ss, isA);
         }
     }
 };
 
 struct order_info {
-    i64 N_order;
-    std::vector<i64> id, w, z, state, time;
-    order_info() = default;
+    i64 N_order = 0;
+    std::vector<i64> id;
+    std::vector<i64> w;
+    std::vector<i64> z;
+    std::vector<i64> state;
+    std::vector<i64> time;
+
+    //order_info() = default;
+
     void load(std::istream& src, [[maybe_unused]] i64 V = 225, [[maybe_unused]] i64 T_last = 900) {
         src >> N_order;
         id.resize(N_order);
@@ -304,18 +321,11 @@ struct graph_summary {
     }
 };
 
-template<class... Args>
-string strprintf(const char* fmt, const Args & ...args) {
-    char buf[65536];
-    sprintf(buf, fmt, args...);
-    return buf;
-}
-template<class P>
-struct strategy :public P {
+struct strategy: public B {
     const graph_summary& gs;
     vector<list<string>> command_queue;
-    strategy(const P& p, const graph_summary& gs) : P(p), gs(gs),
-        command_queue(P::EV.N_EV) {}
+    strategy(const B& p, const graph_summary& gs) : B(p), gs(gs),
+        command_queue(B::EV.N_EV) {}
     virtual void command(const grid_info& g_i, const EV_info& ev_i, const order_info& order_i) = 0;
     virtual void initialize() {
         for (auto& queue : command_queue) queue.clear();
@@ -344,7 +354,6 @@ struct strategy :public P {
         return ret;
     }
     void enqueue(i64 EV_index, const string& cmd) {
-        //cerr << EV_index << ": " << cmd << endl;
         command_queue[EV_index].push_back(cmd);
     }
     void enqueue(i64 EV_index, const string& cmd, i64 repeat) {
@@ -356,7 +365,10 @@ struct strategy :public P {
     }
 };
 
-struct GreedyTransportStrategy : strategy<B> {
+struct TStrategy: public strategy {
+public:
+    bool isA = false;
+
 public:
     map<i64, i64> Orders;
     map<i64, i64> Grids;
@@ -408,7 +420,7 @@ public:
     i64 MaxExcess = 0;
 
 public:
-    GreedyTransportStrategy(const B& b, const graph_summary& gs, i64 qt) : strategy<B>(b, gs), tt(qt) {
+    TStrategy(const B& b, const graph_summary& gs, i64 qt, bool _isA) : strategy(b, gs), tt(qt), isA(_isA) {
         ConsumptionByGrid = vector<vector<i64>>(b.grid.N_grid, vector<i64>(T_max));
         ConsumptionByEv = vector<map<i64, map<i64, i64>>>(EV.N_EV);
     }
@@ -505,50 +517,6 @@ public:
         return { sumExcess, sumBuy };
     }
 
-    i64 CalculateBestGrid(const grid_info& grid_i, const EV_info& ev_i, i64 evId, i64 from, i64 curTm, i64 chargeLeft, i64 buyLimit = 0) {
-        auto& ev = ev_i.c[evId];
-
-        double bestValue = -1e18;
-        i64 bestGridId = -1;
-
-        for (i64 gridId = 0; gridId < grid_i.N_grid; gridId++) {
-            i64 len = gs.len[from][grid_i.x[gridId]];
-
-            if (chargeLeft < len * EV.Delta_EV_move) {
-                continue;
-            }
-
-            i64 chargeNeeded = (EV.C_EV_max - (chargeLeft - len * EV.Delta_EV_move));
-            i64 startTm = curTm + len;
-
-            auto [curExcess, curBuy] = CalculateLosses(grid_i, gridId, curTm);
-            SimulateCharging(gridId, startTm, chargeNeeded, /* rollback */ false);
-
-            auto [nxtExcess, nxtBuy] = CalculateLosses(grid_i, gridId, curTm);
-            SimulateCharging(gridId, startTm, chargeNeeded, /* rollback */ true);
-
-            i64 excess = nxtExcess - curExcess;
-            i64 buy = nxtBuy - curBuy;
-
-            //cerr << gridId << " " << excess << " " << buy << endl;
-
-            //if (buy > buyLimit) {
-            //    continue;
-            //}
-
-            double value = -len * (i64)EV.Delta_EV_move - buy * gamma - excess;
-
-            if (bestValue < value) {
-                bestValue = value;
-                bestGridId = gridId;
-            }
-        }
-
-        //cerr << bestValue << endl;
-
-        return bestGridId >= 0 ? grid_i.x[bestGridId] : -1;
-    }
-
     void TestGridsPwPredict(const grid_info& grid_i) {
         if (!tm) {
             return;
@@ -580,29 +548,15 @@ public:
                 buy = 0;
             }
 
-            /*
-            if (excess != grid_i.pw_excess[gridId]) {
-                cerr << tm << " excess != grid_i.pw_excess[gridId]" << endl;
-                throw 1;
-            }
+            //if (excess != grid_i.pw_excess[gridId]) {
+            //    cerr << tm << " excess != grid_i.pw_excess[gridId]" << endl;
+            //    throw 1;
+            //}
 
-            if (buy != grid_i.pw_buy[gridId]) {
-                //for (i64 evId = 0; evId < EV.N_EV; evId++) {
-                //    if (!ConsumptionByEv[evId].count(gridId)) {
-                //        continue;
-                //    }
-                //    if (!ConsumptionByEv[evId][gridId].count(tm - 1)) {
-                //        continue;
-                //    }
-                //    cerr << evId << " " << ConsumptionByEv[evId][gridId][tm - 1] << endl;
-                //}
-                //cerr << grid_i.y[gridId] - PreviousGridCharge[gridId] << "/" << grid_i.pw_actual[gridId] << endl;
-                //cerr << buy << " - " << grid_i.pw_buy[gridId] << endl;
-                //cerr << grid.V_grid_max << "/" << ConsumptionByGrid[gridId][tm - 1] << "/" << grid_i.pw_actual[gridId] << endl;
-                //cerr << gridId << " buy != grid_i.pw_buy[gridId]" << endl;
-                throw 1;
-            }
-            */
+            //if (buy != grid_i.pw_buy[gridId]) {
+            //    cerr << gridId << " buy != grid_i.pw_buy[gridId]" << endl;
+            //    throw 1;
+            //}
         }
     }
 
@@ -843,7 +797,11 @@ private:
 
 private:
     i64 GetEvLimit() {
-        vector<i64> evLimits = { 3, 15, 12, 6, 9 }; // todo: replace 15 by 14
+        if (isA) {
+            return 0; // EV.N_EV / 2;
+        }
+
+        vector<i64> evLimits = { 3, 15, 12, 6, 9 }; // todo: replace 3 by 4
 
         /*
         if (evLimits.front() > EV.N_EV) {
@@ -1333,30 +1291,37 @@ vector<string> split_command(const string& command_pack) {
 
 int main() {
     setbuf(stderr, nullptr);
-
+    bool isA = false;
     bool dump = false;
+
     i64 N_solution = 1;
-    cin >> N_solution;
-    B prob(cin);
+    if (!isA) {
+        cin >> N_solution;
+    }
+
+    B prob(cin, isA);
+
     if (dump) {
         stringstream ss;
-        prob.dump(ss);
+        prob.dump(ss, isA);
 
         ofstream ofs("common.dump");
         ofs << ss.str();
         ofs.close();
     }
-    std::shared_ptr<strategy<B>> str = nullptr;
+
+    TStrategy* str = nullptr;
     graph_summary gs(prob.graph, prob.grid);
     grid_info grid_i(prob.grid.N_grid);
     EV_info ev_i(prob.EV.N_EV);
     order_info order_i;
+
     string command_per_turn;
     vector<pair<double, double>> scores; scores.reserve(N_solution);
     cerr << "DayType: " << prob.grid.DayType << endl;
     for (i64 n = 0; n < N_solution; ++n) {
         stringstream ss;
-        str.reset(new GreedyTransportStrategy(prob, gs, n));
+        str = new TStrategy(prob, gs, n, isA);
         str->initialize();
 
         i64 pwExcess = 0;
@@ -1368,12 +1333,18 @@ int main() {
 
         for (i64 t = 0; t < prob.T_max; ++t) {
             grid_i.load(cin);
-            ev_i.load(cin);
-            order_i.load(cin);
+            ev_i.load(cin, isA);
+
+            if (!isA) {
+                order_i.load(cin);
+            }
+
             if (dump) {
                 grid_i.dump(ss);
-                ev_i.dump(ss);
-                order_i.dump(ss);
+                ev_i.dump(ss, isA);
+                if (!isA) {
+                    order_i.dump(ss);
+                }
             }
 
             str->command(grid_i, ev_i, order_i);
@@ -1410,13 +1381,17 @@ int main() {
 
 
         grid_i.load(cin);
-        ev_i.load(cin);
-        order_i.load(cin);
+        ev_i.load(cin, isA);
+        if (!isA) {
+            order_i.load(cin);
+        }
 
         if (dump) {
             grid_i.dump(ss);
-            ev_i.dump(ss);
-            order_i.dump(ss);
+            ev_i.dump(ss, isA);
+            if (!isA) {
+                order_i.dump(ss);
+            }
         }
 
         if (dump) {
@@ -1425,10 +1400,6 @@ int main() {
             ofs << ss.str();
             ofs.close();
         }
-
-        double S_trans, S_ele;
-        cin >> S_trans >> S_ele;
-
 
         i64 sumEvCharge = 0;
         for (i64 evId = 0; evId < prob.EV.N_EV; evId++) {
@@ -1441,13 +1412,24 @@ int main() {
         }
 
         //cerr << prob.grid.N_grid << "/" << prob.EV.N_EV << endl;
-        cerr << left.size() << "/" << picked.size() << "/" << dropped.size() << endl;
         cerr << pwExcess << "/" << pwBuy << "|" << sumEvCharge << "+" << sumGridCharge << "=" << sumEvCharge + sumGridCharge << endl;
 
-        cerr << S_trans << " " << S_ele << endl;
-        cerr << (S_trans - prob.S_ref_trans) << " * " << (S_ele - prob.S_ref_ele) << " = " << (S_trans - prob.S_ref_trans) * (S_ele - prob.S_ref_ele) << endl;
+        if (!isA) {
+            cerr << left.size() << "/" << picked.size() << "/" << dropped.size() << endl;
 
+            double S_trans = 0.0;
+            double S_ele = 0.0;
+            cin >> S_trans >> S_ele;
 
+            cerr << S_trans << " " << S_ele << endl;
+            cerr << (S_trans - prob.S_ref_trans) << " * " << (S_ele - prob.S_ref_ele) << " = " << (S_trans - prob.S_ref_trans) * (S_ele - prob.S_ref_ele) << endl;
+        }
+        else {
+            double score = 0.0;
+            cin >> score;
+
+            cerr << score << endl;
+        }
     }
     return 0;
 }
