@@ -747,6 +747,10 @@ public:
         i64 nxt = SimulateDelivery(ev_i, order_i, orders, evId);
         EvTargetOrder[evId].erase(orderId);
 
+        if (nxt >= T_max - tm) {
+            return 1'000'000;
+        }
+
         return nxt - now;
     }
 
@@ -884,7 +888,7 @@ public:
             cerr << ss.str();
         }
 
-        set<pair<i64, i64>> evsQueue;
+        set<pair<i64, i64>, greater<pair<i64, i64>>> evsQueue;
         set<pair<i64, i64>, greater<pair<i64, i64>>> evsChargeQueue;
         set<pair<i64, i64>> evsStaticQueue;
 
@@ -1030,6 +1034,9 @@ public:
                 }
                 */
                 i64 cost = EsimateDeliveryCost(ev_i, order_i, orders, evId, orderId);
+                if (cost > T_max) {
+                    continue;
+                }
                 ordersQueue.insert({ cost, {evId, orderId} });
             }
         }
