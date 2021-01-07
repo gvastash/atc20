@@ -1624,8 +1624,8 @@ public:
             }
 
             // true random charge
-            if (Grids.count(ev.u) && ev.charge < (T_max - tm) * EV.Delta_EV_move && ev.charge + EV.V_EV_max <= EV.C_EV_max) {
-                i64 chargeNeeded = min(EV.C_EV_max, (T_max - tm) * EV.Delta_EV_move);
+            if (Grids.count(ev.u) && (grid.DayType == 3 || ev.charge < (T_max - tm) * EV.Delta_EV_move) && ev.charge + EV.V_EV_max <= EV.C_EV_max) {
+                i64 chargeNeeded = grid.DayType == 3 ? EV.C_EV_max : min(EV.C_EV_max, (T_max - tm) * EV.Delta_EV_move);
                 i64 gridId = Grids[ev.u];
 
                 /*
@@ -2214,11 +2214,13 @@ public:
 
                     i64 bLen = gs.len[grid_i.x[aGridId]][grid_i.x[gridId]];
                     if (chargeNeeded < 0) {
-                        additionalCharge = CalculateSafeCharge(grid_i, aGridId, tm, aTm);
+                        // additionalCharge = CalculateSafeCharge(grid_i, aGridId, tm, aTm);
+                        additionalCharge = -GridLimits[aGridId].first;
                         additionalCharge = min(additionalCharge, EV.C_EV_max - evCharge);
                     }
                     else {
-                        additionalCharge = CalculateSafeDrop(grid_i, aGridId, tm, aTm);
+                        //additionalCharge = CalculateSafeDrop(grid_i, aGridId, tm, aTm);
+                        additionalCharge = GridLimits[aGridId].second;
                         additionalCharge = min(additionalCharge, evCharge - bLen * EV.Delta_EV_move);
                     }
 
@@ -2259,13 +2261,13 @@ public:
                 i64 val = -sumLen * EV.Delta_EV_move + 2 * (etalonBuy - buy) + (etalonExcess - excess);
                 val *= 10;
 
-                val += ev.charge - evCharge;
-
-                /*
-                if (tm < T_last) {
+                if (grid.DayType == 3) {
                     val += ev.charge - evCharge;
                 }
-                */
+
+                //if (tm < T_last) {
+                //    val += ev.charge - evCharge;
+                //}
 
                 if (bestVal < val) {
                     bestVal = val;
@@ -2325,7 +2327,7 @@ public:
         }
 
         //if (tm % (T_max / grid.N_div) == 1) {
-        if (tm > 0) {
+        if (tm % 10 == 1) {
             //cerr << tm << endl;
             //for (i64 evId = 0; evId < EV.N_EV; evId++) {
             //    cerr << "#" << evId << ": " << ev_i.c[evId].charge << endl;
@@ -2437,7 +2439,7 @@ vector<string> split_command(const string& command_pack) {
 int main() {
     setbuf(stderr, nullptr);
     bool isA = false;
-    bool dump = true;
+    bool dump = false;
 
     i64 N_solution = 1;
     if (!isA) {
