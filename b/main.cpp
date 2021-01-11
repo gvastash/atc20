@@ -14,10 +14,13 @@
 #include <string>
 #include <algorithm>
 #include <iomanip>
+#include <chrono>
 
 using namespace std;
 
 typedef long long int i64;
+
+vector<i64> BestSuite;
 
 using namespace std;
 struct graph_data {
@@ -375,6 +378,17 @@ struct strategy : public B {
     }
 };
 
+vector<string> split_command(const string& command_pack) {
+    vector<string> ret;
+    stringstream reader(command_pack);
+    string line;
+    while (getline(reader, line)) {
+        if (line == "") continue;
+        else ret.emplace_back(line);
+    }
+    return ret;
+}
+
 struct TStrategy : public strategy {
 public:
     bool isA = false;
@@ -384,8 +398,8 @@ public:
     map<i64, i64> Grids;
 
 public:
-    set<pair<i64, i64>, greater<pair<i64, i64>>> EvsQueue;
-    set<pair<i64, i64>, greater<pair<i64, i64>>> EvsChargeQueue;
+    set<pair<i64, i64>> EvsQueue;
+    set<pair<i64, i64>> EvsChargeQueue;
 
 public:
     set<i64> AssignedOrders;
@@ -443,6 +457,9 @@ public:
     vector<i64> GridChargeNeeded;
 
 public:
+    vector<i64> StayCnt;
+
+public:
     i64 Succ = 0;
     i64 Miss = 0;
 
@@ -476,11 +493,15 @@ public:
         GridChargeNeeded = vector<i64>(grid.N_grid);
 
         Eps = vector<i64>(grid.N_grid);
-        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-            for (i64 i = 0; i < grid.N_grid; i++) {
-                Eps[gridId] = max(Eps[gridId], gs.len[grid.x[gridId]][grid.x[i]]);
+        if (grid.DayType != 2) {
+            for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+                for (i64 i = 0; i < grid.N_grid; i++) {
+                    Eps[gridId] = max(Eps[gridId], gs.len[grid.x[gridId]][grid.x[i]]);
+                }
             }
         }
+
+        StayCnt = vector<i64>(EV.N_EV);
     }
 
     void SimulateCharging(i64 gridId, i64 startTm, i64 chargeNeeded, bool rollback, i64 evId = -1) {
@@ -859,7 +880,7 @@ private:
 
         for (i64 evId = 0; evId < EV.N_EV; evId++) {
             auto evCharge = ev_i.c[evId].charge;
-            cerr << "ev #" << evId << ": " << evCharge << endl;
+            cerr << "ev #" << evId << ": " << evCharge << "/" << StayCnt[evId] << endl;
         }
     }
 
@@ -875,8 +896,16 @@ private:
             return 0; // 8; // EV.N_EV / 2;
         }
 
-        vector<i64> evLimits = { 3, 15, 11, 6, 9 }; // todo: replace 12 by 11
+        if (tt < 0) {
+            return -tt;
+        }
 
+        vector<i64> evLimits = { 3, 15, 11, 6, 9 }; // todo: replace 12 by 11
+        if (BestSuite.size() == 5) {
+            evLimits = BestSuite;
+        }
+
+        //sort(evLimits.begin(), evLimits.end());
         /*
         if (evLimits.front() > EV.N_EV) {
             evLimits.front() = 4; // todo: replace 4 by 3
@@ -1094,7 +1123,11 @@ public:
             if (!excess && !buy) {
                 //cerr << safeCharge << "/" << minCharge << endl;
                 Succ++;
-                return min(safeCharge, minCharge);
+                i64 result = min(safeCharge, minCharge);
+                //if (grid.DayType % 2 == 1) {
+                //    return max(0ll, result - grid.Delta_event);
+                //}
+                return result;
             }
             else {
                 Miss++;
@@ -1121,6 +1154,10 @@ public:
                     l = m;
                 }
             }
+
+            //if (grid.DayType % 2 == 1) {
+            //    return max(0ll, l - grid.Delta_event);
+            //}
 
             return l;
         }
@@ -1200,7 +1237,11 @@ public:
             if (!excess && !buy) {
                 //cerr << safeDrop << "/" << grid.C_grid_max - maxCharge << endl;
                 Succ++;
-                return min(safeDrop, grid.C_grid_max - maxCharge);
+                i64 result = min(safeDrop, grid.C_grid_max - maxCharge);
+                //if (grid.DayType % 2 == 1) {
+                //    return max(0ll, result - grid.Delta_event);
+                //}
+                return result;
             }
             else {
                 Miss++;
@@ -1227,6 +1268,10 @@ public:
                 }
             }
 
+
+            //if (grid.DayType % 2 == 1) {
+            //    return max(0ll, l - grid.Delta_event);
+            //}
             return l;
         }
     }
@@ -1590,7 +1635,7 @@ public:
                 }
 
                 if (pickedUp) {
-                    continue;
+continue;
                 }
             }
 
@@ -1689,6 +1734,12 @@ public:
                 */
 
                 i64 safeCharge = min(EV.C_EV_max - ev.charge, CalculateSafeCharge(grid_i, gridId, tm, tm));
+
+                i64 minChargeLimit = min(150ll, (T_max - tm)) * EV.Delta_EV_move;
+                if (ev.charge < minChargeLimit) {
+                    safeCharge = max(safeCharge, minChargeLimit - ev.charge);
+                }
+
                 //i64 safeCharge = min(chargeNeeded, CalculateSafeCharge(grid_i, gridId, tm, tm));
                 if (safeCharge > EV.V_EV_max) {
                     SimulateCharging(gridId, tm, safeCharge, false, evId);
@@ -2125,9 +2176,9 @@ public:
 
         set<pair<pair<i64, i64>, pair<i64, i64>>> q;
         for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-            if (!GridNextLoss[gridId]) {
-                continue;
-            }
+            //if (!GridNextLoss[gridId]) {
+            //    continue;
+            //}
             for (auto [_, evId] : EvsChargeQueue) {
                 auto& ev = ev_i.c[evId];
 
@@ -2161,9 +2212,9 @@ public:
                 continue;
             }
 
-            if (!GridNextLoss[gridId]) {
-                continue;
-            }
+            //if (!GridNextLoss[gridId]) {
+            //    continue;
+            //}
 
             auto& ev = ev_i.c[evId];
 
@@ -2192,6 +2243,17 @@ public:
                 i64 additionalCharge = 0;
                 i64 evCharge = ev.charge;
                 i64 deltaTm = 0;
+
+                // drop charge
+                if (!chargeNeeded) {
+                    if (grid.DayType % 2 != 1) {
+                        continue;
+                    }
+
+                    if (aGridId >= 0) {
+                        continue;
+                    }
+                }
 
                 if (aGridId < 0) {
                     i64 len = gs.len[ev.u][grid_i.x[gridId]];
@@ -2243,13 +2305,21 @@ public:
                     deltaTm = aTm - tm;
                 }
 
-                i64 chargeAvailable = chargeNeeded < 0 ? evCharge - Eps[gridId] * EV.Delta_EV_move : EV.C_EV_max - evCharge;
-
                 if (chargeNeeded < 0) {
+                    i64 chargeAvailable = evCharge - Eps[gridId] * EV.Delta_EV_move;
                     chargeNeeded = -min(-chargeNeeded, chargeAvailable);
                 }
-                else {
+                else if (chargeNeeded > 0) {
+                    i64 chargeAvailable = EV.C_EV_max - evCharge;
                     chargeNeeded = min(chargeNeeded, chargeAvailable);
+                }
+                else if (grid.DayType == 3) {
+                    i64 chargeAvailable = evCharge - Eps[gridId] * EV.Delta_EV_move;
+                    chargeNeeded = -min(chargeAvailable, GridLimits[gridId].second);
+                }
+                else if (grid.DayType == 1) {
+                    i64 chargeAvailable = EV.C_EV_max - evCharge;
+                    chargeNeeded = min(chargeAvailable, -GridLimits[gridId].first);
                 }
 
                 auto [etalonExcess, etalonBuy] = CalculateLosses(grid_i, gridId, tm);
@@ -2258,15 +2328,36 @@ public:
                 SimulateCharging(gridId, tm + deltaTm, chargeNeeded, true);
 
                 i64 sumLen = aGridId < 0 ? gs.len[ev.u][grid_i.x[gridId]] : gs.len[ev.u][grid_i.x[aGridId]] + gs.len[grid_i.x[aGridId]][grid_i.x[gridId]];
+
+                //if (grid.DayType == 2) {
+                //    sumLen *= 10;
+                //}
+
                 i64 val = -sumLen * EV.Delta_EV_move + 2 * (etalonBuy - buy) + (etalonExcess - excess);
                 val *= 10;
+                
+                evCharge += chargeNeeded;
 
                 if (grid.DayType == 3) {
                     val += ev.charge - evCharge;
                 }
 
+                if (grid.DayType == 1) {
+                    val *= 10;
+                    val += evCharge - ev.charge;
+                }
+
+
+                //if (grid.DayType == 1) {
+                //    val += evCharge - ev.charge;
+                //}
+
                 //if (tm < T_last) {
                 //    val += ev.charge - evCharge;
+                //}
+
+                //if (!GridNextLoss[gridId]) {
+                //    cerr << val << endl;
                 //}
 
                 if (bestVal < val) {
@@ -2288,7 +2379,9 @@ public:
                 continue;
             }
 
-            //cerr << "#" << evId << "->" << "#" << gridId << ": " << bestVal << "/" << bestSumLen << "/" << bestChargeNeeded << endl;
+            //if (!GridNextLoss[gridId]) {
+            //    cerr << "#" << evId << "->" << "#" << gridId << ": " << bestVal << "/" << bestSumLen << "/" << bestChargeNeeded << endl;
+            //}
 
             if (bestAdditionalGridId >= 0) {
                 //cerr << tm << ": " << "#" << evId << "->" << "#" << bestAdditionalGridId << "->" << "#" << gridId << ": " << bestAdditionalCharge << "/" << grid_i.y[bestAdditionalGridId] << endl;
@@ -2327,7 +2420,10 @@ public:
         }
 
         //if (tm % (T_max / grid.N_div) == 1) {
-        if (tm % 10 == 1) {
+        //if ((tt >= 0 && tm % 10 == 1) || (tt < 0 && tm % 200 == 1)) {
+        set<i64> z = { 1, 11, 21 };
+        set<i64> w = { 1, 51, 101, 151, 201, 401, 601, 801, 901 };
+        if ((z.count(tm % 50) && grid.DayType % 2 == 1 && tt >= 0) || w.count(tm)) {
             //cerr << tm << endl;
             //for (i64 evId = 0; evId < EV.N_EV; evId++) {
             //    cerr << "#" << evId << ": " << ev_i.c[evId].charge << endl;
@@ -2336,16 +2432,43 @@ public:
             //    ClearChargingPlan(evId);
             //}
 
+            if (false && tm == 1) {
+                i64 balance = grid.N_grid * grid.C_grid_init + EV.N_EV * EV.C_EV_init;
+
+                for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+                    CalculateIncidents(grid_i, gridId);
+
+                    cerr << "grid #" << gridId << ":";
+                    for (auto [t, charge] : Incidents[gridId]) {
+                        auto [start, end] = t;
+                        cerr << " " << "[" << start << ", " << end << "]" << " -> " << charge << ";";
+                    }
+                    cerr << endl;
+
+                    for (i64 qtm = tm; qtm < T_max; qtm++) {
+                        i64 pw = GetPw(grid_i, gridId, qtm, tm);
+                        balance += pw;
+                    }
+                }
+                cerr << "balance = " << balance << endl;
+            }
+
             /*
             for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
                 CalculateIncidents(grid_i, gridId);
 
-                cerr << "grid #" << gridId << ":";
+                bool sumExcess = 0;
                 for (auto [t, charge] : Incidents[gridId]) {
-                    auto [start, end] = t;
-                    cerr << " " << "[" << start << ", " << end << "]" << " -> " << charge << ";";
+                    if (charge > 0) {
+                        sumExcess += charge;
+                    }
                 }
-                cerr << endl;
+
+                if (!sumExcess) {
+                    for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+                        Eps[gridId] = 0;
+                    }
+                }
             }
             */
 
@@ -2414,8 +2537,11 @@ public:
 
         //HandleEvsChargeQueue(grid_i, ev_i);
         //HandleEvsCharge(grid_i, ev_i, order_i);
+
         HandleCustomEvs(grid_i, ev_i);
         HandleEvsQueue(grid_i, ev_i, order_i);
+
+        PostUpdateStat(ev_i);
 
         tm += 1;
 
@@ -2423,22 +2549,400 @@ public:
             LastStat(grid_i, ev_i, order_i);
         }
     }
+
+public:
+    void PostUpdateStat(const EV_info& ev_i) {
+        for (i64 evId = 0; evId < EV.N_EV; evId++) {
+            if (command_queue[evId].empty() || command_queue[evId].front() == "stay" || (command_queue[evId].front().find("move") == 0 && ev_i.c[evId].charge < EV.Delta_EV_move)) {
+                StayCnt[evId] += 1;
+            }
+        }
+    }
+
+public:
+    pair<double, double> SimulateProccess() {
+        mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
+        uniform_int_distribution<i64> dist(0ll, std::numeric_limits<i64>::max());
+
+        grid_info grid_i;
+        EV_info ev_i;
+        order_info order_i;
+
+        grid_i.N_grid = grid.N_grid;
+        grid_i.x.resize(grid_i.N_grid);
+        grid_i.y.resize(grid_i.N_grid);
+        grid_i.pw_actual.resize(grid_i.N_grid);
+        grid_i.pw_excess.resize(grid_i.N_grid);
+        grid_i.pw_buy.resize(grid_i.N_grid);
+
+        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+            grid_i.x[gridId] = grid.x[gridId];
+            grid_i.y[gridId] = grid.C_grid_init;
+        }
+
+
+        ev_i.N_EV = EV.N_EV;
+        ev_i.c.resize(ev_i.N_EV);
+
+        for (i64 evId = 0; evId < EV.N_EV; evId++) {
+            ev_i.c[evId].u = EV.pos[evId];
+            ev_i.c[evId].v = EV.pos[evId];
+            ev_i.c[evId].dist_from_u = 0;
+            ev_i.c[evId].dist_to_v = 0;
+            ev_i.c[evId].N_order = 0;
+            ev_i.c[evId].charge = EV.C_EV_init;
+        }
+
+        order_i.N_order = 0;
+
+        i64 transScore = 0;
+        i64 dropped = 0;
+
+        i64 sumPwBuy = 0;
+        i64 sumPwExcess = 0;
+
+        i64 maxOrderId = 0;
+
+        for (i64 qtm = 0; qtm <= T_max; qtm++) {
+            ConstructMappings(grid_i, order_i);
+            UpdateOrdersState(ev_i, order_i);
+
+            for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+                sumPwBuy += grid_i.pw_buy[gridId];
+                sumPwExcess += grid_i.pw_excess[gridId];
+            }
+
+            if (qtm == T_max) {
+                break;
+            }
+
+            //if (qtm < T_last && dist(rng) % 100 < (i64)(100 * p_const_trans)) {
+            const vector<i64> z = { 1, 1, 1, 0, 1, 1, 0, 1, 1, 0 };
+            if (qtm < T_last && z[qtm % 10]) {
+                order_i.N_order += 1;
+                order_i.state.resize(order_i.N_order);
+                order_i.time.resize(order_i.N_order);
+                order_i.w.resize(order_i.N_order);
+                order_i.z.resize(order_i.N_order);
+                order_i.id.resize(order_i.N_order);
+                order_i.w.back() = dist(rng) % graph.V;
+
+                while (true) {
+                    order_i.z.back() = dist(rng) % graph.V;
+                    if (order_i.w.back() != order_i.z.back()) {
+                        break;
+                    }
+                }
+                order_i.id.back() = ++maxOrderId;
+                order_i.state.back() = 0;
+                order_i.time.back() = qtm;
+            }
+
+            command(grid_i, ev_i, order_i);
+            auto command_list = split_command(dequeue(ev_i));
+
+
+            vector<i64> consumptionByGrid(grid.N_grid);
+            for (i64 evId = 0; evId < EV.N_EV; evId++) {
+                auto& ev = ev_i.c[evId];
+
+                stringstream ss(command_list[evId]);
+
+                string cmd;
+                ss >> cmd;
+
+                if (cmd == "stay") {
+                    continue;
+                }
+
+                if (cmd == "pickup") {
+                    if (ev.u != ev.v) {
+                        cerr << "#" << evId << ": " << cmd << " " << "ev.u != ev.v" << endl;
+                        throw 1;
+                    }
+
+                    i64 orderId = -1;
+                    ss >> orderId;
+
+                    if (!Orders.count(orderId) || order_i.w[Orders[orderId]] != ev.u) {
+                        cerr << "#" << evId << ": " << cmd << " " << "there is no such order" << endl;
+                        throw 1;
+                    }
+
+                    order_i.state[Orders[orderId]] += 1;
+                    continue;
+                }
+
+                if (cmd == "move") {
+                    i64 x = -1;
+                    ss >> x;
+                    x--;
+
+                    bool canMove = ev.charge >= EV.Delta_EV_move;
+
+                    if (ev.u != ev.v) {
+                        if (ev.u != x && ev.v != x) {
+                            cerr << "#" << evId << ": " << cmd << " " << "ev.u != x && ev.v != x" << endl;
+                            throw 1;
+                        }
+                        if (canMove) {
+                            if (x == ev.u) {
+                                ev.dist_from_u -= 1;
+                                ev.dist_to_v += 1;
+                            }
+                            if (x == ev.v) {
+                                ev.dist_from_u += 1;
+                                ev.dist_to_v -= 1;
+                            }
+                        }
+                    }
+                    else {
+                        if (!graph.edges[ev.u].count(x)) {
+                            cerr << "#" << evId << ": " << cmd << " " << "!graph.edges[ev.u].count(x) " << endl;
+                            throw 1;
+                        }
+
+                        if (canMove) {
+                            ev.v = x;
+                            ev.dist_from_u += 1;
+                            ev.dist_to_v = graph.edges[ev.u][x] - 1;
+                        }
+                    }
+
+                    if (!canMove) {
+                        continue;
+                    }
+
+                    ev.charge -= EV.Delta_EV_move;
+
+                    if (!ev.dist_from_u) {
+                        ev.dist_to_v = 0;
+                        ev.v = ev.u;
+                    }
+
+                    if (!ev.dist_to_v) {
+                        ev.dist_from_u = 0;
+                        ev.u = ev.v;
+                    }
+
+                    if (ev.u == ev.v) {
+                        for (auto orderId : EvCarringOrder[evId]) {
+                            if (order_i.z[Orders[orderId]] == ev.u) {
+                                order_i.state[Orders[orderId]] += 1;
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                if (cmd == "charge_from_grid") {
+                    i64 v = -1;
+                    ss >> v;
+
+                    if (!v) {
+                        cerr << "#" << evId << ": " << cmd << " " << "!v" << endl;
+                        throw 1;
+                    }
+
+                    if (ev.charge + v > EV.C_EV_max) {
+                        cerr << "#" << evId << ": " << cmd << " " << "ev.charge + v > EV.C_EV_max" << endl;
+                        throw 1;
+                    }
+
+                    if (ev.u != ev.v) {
+                        cerr << "#" << evId << ": " << cmd << " " << "ev.u != ev.v" << endl;
+                        throw 1;
+                    }
+
+                    if (!Grids.count(ev.u)) {
+                        cerr << "#" << evId << ": " << cmd << " " << "Grids.count(ev.u)" << endl;
+                        throw 1;
+                    }
+
+                    ev.charge += v;
+                    consumptionByGrid[Grids[ev.u]] += v;
+                    continue;
+                }
+
+                if (cmd == "charge_to_grid") {
+                    i64 v = -1;
+                    ss >> v;
+
+                    if (!v) {
+                        cerr << "#" << evId << ": " << cmd << " " << "!v" << endl;
+                        throw 1;
+                    }
+
+                    if (ev.charge - v < 0) {
+                        cerr << "#" << evId << ": " << cmd << " " << "ev.charge + v > EV.C_EV_max" << endl;
+                        throw 1;
+                    }
+
+                    if (ev.u != ev.v) {
+                        cerr << "#" << evId << ": " << cmd << " " << "ev.u != ev.v" << endl;
+                        throw 1;
+                    }
+
+                    if (!Grids.count(ev.u)) {
+                        cerr << "#" << evId << ": " << cmd << " " << "Grids.count(ev.u)" << endl;
+                        throw 1;
+                    }
+
+                    ev.charge -= v;
+                    consumptionByGrid[Grids[ev.u]] -= v;
+                    continue;
+                }
+
+                cerr << "#" << evId << ": " << cmd << " " << "invalid cmd" << endl;
+                throw 1;
+            }
+
+            for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+                i64& c = grid_i.y[gridId];
+                i64 delta = GetPw(grid_i, gridId, qtm, 0) - consumptionByGrid[gridId];
+                grid_i.pw_actual[gridId] = GetPw(grid_i, gridId, qtm, 0);
+
+                i64 excess = delta - min(grid.V_grid_max, grid.C_grid_max - c);
+                if (excess < 0) {
+                    excess = 0;
+                }
+                grid_i.pw_excess[gridId] = excess;
+
+                i64 buy = -delta - min(grid.V_grid_max, c);
+                if (buy < 0) {
+                    buy = 0;
+                }
+                grid_i.pw_buy[gridId] = buy;
+
+                c += delta;
+                if (c < 0) {
+                    c = 0;
+                }
+                if (c > grid.C_grid_max) {
+                    c = grid.C_grid_max;
+                }
+            }
+
+            if (true) {
+                i64 i = 0;
+                while (i < order_i.N_order) {
+                    if (order_i.state[i] <= 1) {
+                        i += 1;
+                        continue;
+                    }
+
+                    dropped += 1;
+
+                    transScore += T_max - (qtm - order_i.time[i]);
+
+                    swap(order_i.id[i], order_i.id.back());
+                    swap(order_i.state[i], order_i.state.back());
+                    swap(order_i.time[i], order_i.time.back());
+                    swap(order_i.w[i], order_i.w.back());
+                    swap(order_i.z[i], order_i.z.back());
+                    order_i.N_order -= 1;
+                    order_i.id.resize(order_i.N_order);
+                    order_i.state.resize(order_i.N_order);
+                    order_i.time.resize(order_i.N_order);
+                    order_i.w.resize(order_i.N_order);
+                    order_i.z.resize(order_i.N_order);
+                }
+            }
+        }
+
+        transScore -= P_trans * order_i.N_order;
+
+        i64 sumEvCharge = 0;
+        for (i64 evId = 0; evId < EV.N_EV; evId++) {
+            sumEvCharge += ev_i.c[evId].charge;
+        }
+
+        i64 sumGridCharge = 0;
+        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+            sumGridCharge += grid_i.y[gridId];
+        }
+
+        i64 eleScore = sumEvCharge + sumGridCharge - gamma * sumPwBuy;
+
+        i64 left = 0;
+        i64 picked = 0;
+        for (i64 i = 0; i < order_i.N_order; i++) {
+            if (!order_i.state[i]) {
+                left += 1;
+            }
+            if (order_i.state[i]) {
+                picked += 1;
+            }
+        }
+
+        cerr << sumPwExcess << "/" << sumPwBuy << "|" << sumEvCharge << "+" << sumGridCharge << "=" << sumEvCharge + sumGridCharge << endl;
+        cerr << left << "/" << picked << "/" << dropped << endl;
+
+        cerr << transScore << " " << eleScore << endl;
+        cerr << (transScore - S_ref_trans) << " * " << (eleScore - S_ref_ele) << " = " << (transScore - S_ref_trans) * (eleScore - S_ref_ele) << endl;
+
+        return { transScore , eleScore };
+    }
 };
 
-vector<string> split_command(const string& command_pack) {
-    vector<string> ret;
-    stringstream reader(command_pack);
-    string line;
-    while (getline(reader, line)) {
-        if (line == "") continue;
-        else ret.emplace_back(line);
+double CalculateScoreB(vector<pair<double, double>>& Ans, const B& prob) {
+    Ans.push_back({ prob.S_ref_trans, prob.S_ref_ele });
+
+    std::sort(Ans.begin(), Ans.end());
+    std::vector<std::pair<double, double> > a;
+    a.push_back(Ans[0]);
+    for (size_t i = 1; i < Ans.size(); i++) {
+        bool flag = true;
+        for (size_t j = i + 1; j < Ans.size(); j++) {
+            if (Ans[i].second <= Ans[j].second) {
+                flag = false;
+                break;
+            }
+        }
+        if (flag) {
+            a.push_back(Ans[i]);
+        }
     }
-    return ret;
+
+    double res = 0;
+    for (size_t i = 1; i < a.size(); i++) {
+        res += (a[i].first - a[i - 1].first) * (a[i].second - a[0].second);
+    }
+    return res;
 }
+
+void CalculateBestSuite(const vector<pair<pair<double, double>, i64>>& scores, const B& prob, i64 c, vector<i64>& curSuite, vector<i64>& bestSuite, double& bestScore) {
+    if (curSuite.size() == 5) {
+        vector<pair<double, double>> ans;
+        for (auto i : curSuite) {
+            auto [trans, ele] = scores[i].first;
+            ans.push_back({ trans, ele });
+        }
+        auto curScore = CalculateScoreB(ans, prob);
+        if (bestScore < curScore) {
+            bestScore = curScore;
+            bestSuite.clear();
+            for (auto i : curSuite) {
+                bestSuite.push_back(scores[i].second);
+            }
+        }
+        return;
+    }
+
+    if (c >= scores.size()) {
+        return;
+    }
+
+    curSuite.push_back(c);
+    CalculateBestSuite(scores, prob, c + 1, curSuite, bestSuite, bestScore);
+    curSuite.pop_back();
+    CalculateBestSuite(scores, prob, c + 1, curSuite, bestSuite, bestScore);
+}
+
 
 int main() {
     setbuf(stderr, nullptr);
-    bool isA = false;
+    bool isA = true;
     bool dump = false;
 
     i64 N_solution = 1;
@@ -2467,6 +2971,42 @@ int main() {
     vector<pair<double, double>> scores; scores.reserve(N_solution);
     cerr << "DayType: " << prob.grid.DayType << endl;
     cerr << prob.EV.N_EV << "/" << prob.grid.N_grid << endl;
+
+    double predictedBestScore = 0.0;
+    vector<pair<pair<double, double>, i64>> predictedScores;
+
+    //if (prob.grid.DayType != 3 && !isA) {
+    if (!isA) {
+        for (i64 i = 1; i < prob.EV.N_EV; i++) {
+            str = new TStrategy(prob, gs, -i, isA);
+            str->initialize();
+
+            auto e = str->SimulateProccess();
+            predictedScores.push_back({ e, i });
+        }
+
+        stringstream ss;
+        for (auto& e : predictedScores) {
+            auto [trans, ele] = e.first;
+            ss << (i64)trans << " " << (i64)ele << endl;
+        }
+
+        if (dump) {
+            ofstream ofs("scores.dump");
+            ofs << ss.str();
+            ofs.close();
+        }
+
+        vector<i64> curSuite;
+        CalculateBestSuite(predictedScores, prob, 0, curSuite, BestSuite, predictedBestScore);
+    }
+
+    /*
+    if (prob.grid.DayType == 3) {
+        BestSuite.clear();
+    }
+    */
+
     for (i64 n = 0; n < N_solution; ++n) {
         stringstream ss;
         str = new TStrategy(prob, gs, n, isA);
@@ -2542,13 +3082,6 @@ int main() {
             }
         }
 
-        if (dump) {
-            ofstream ofs;
-            ofs.open("sol_" + to_string(n) + ".dump");
-            ofs << ss.str();
-            ofs.close();
-        }
-
         i64 sumEvCharge = 0;
         for (i64 evId = 0; evId < prob.EV.N_EV; evId++) {
             sumEvCharge += ev_i.c[evId].charge;
@@ -2572,6 +3105,14 @@ int main() {
 
             cerr << S_trans << " " << S_ele << endl;
             cerr << (S_trans - prob.S_ref_trans) << " * " << (S_ele - prob.S_ref_ele) << " = " << (S_trans - prob.S_ref_trans) * (S_ele - prob.S_ref_ele) << endl;
+
+            scores.push_back({ S_trans, S_ele });
+
+            if (dump) {
+                if (!isA) {
+                    ss << S_trans << " " << S_ele << endl;
+                }
+            }
         }
         else {
             double score = 0.0;
@@ -2579,6 +3120,21 @@ int main() {
 
             cerr << score << endl;
         }
+
+
+        if (dump) {
+            ofstream ofs;
+            ofs.open("sol_" + to_string(n) + ".dump");
+            ofs << ss.str();
+            ofs.close();
+        }
+
     }
+
+    if (!isA) {
+        auto score = CalculateScoreB(scores, prob);
+        cerr << predictedBestScore << "-" << score << "=" << predictedBestScore - score << endl;
+    }
+
     return 0;
 }
