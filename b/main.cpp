@@ -102,7 +102,12 @@ struct grid_data {
 };
 
 struct EV_data {
-    i64 N_EV, C_EV_init, C_EV_max, V_EV_max, N_trans_max, Delta_EV_move;
+    i64 N_EV = 0;
+    i64 C_EV_init = 0;
+    i64 C_EV_max = 0;
+    i64 V_EV_max = 0;
+    i64 N_trans_max = 0;
+    i64 Delta_EV_move = 0;
     std::vector<i64> pos;
     EV_data(std::istream& src, bool isA) {
         if (isA) {
@@ -223,7 +228,7 @@ struct carinfo {
 };
 
 struct grid_info {
-    i64 N_grid;
+    i64 N_grid = 0;
     std::vector<i64> x, y;
     std::vector<i64> pw_actual;
     std::vector<i64> pw_excess, pw_buy;
@@ -245,7 +250,7 @@ struct grid_info {
 };
 
 struct EV_info {
-    i64 N_EV;
+    i64 N_EV = 0;
     std::vector<carinfo> c;
     EV_info() = default;
     EV_info(i64 N_EV)
@@ -464,6 +469,12 @@ public:
     i64 Miss = 0;
 
 public:
+    i64 DeliveryDeadline = 0;
+
+public:
+    set<i64> MixedGrids;
+
+public:
     TStrategy(const B& b, const graph_summary& gs, i64 qt, bool _isA) : strategy(b, gs), tt(qt), isA(_isA) {
         ConsumptionByGrid = vector<vector<i64>>(b.grid.N_grid, vector<i64>(T_max));
         ConsumptionByEv = vector<map<i64, map<i64, i64>>>(EV.N_EV);
@@ -493,7 +504,7 @@ public:
         GridChargeNeeded = vector<i64>(grid.N_grid);
 
         Eps = vector<i64>(grid.N_grid);
-        if (grid.DayType != 2) {
+        if (grid.DayType != 1) { // probably DayType == 1 ?
             for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
                 for (i64 i = 0; i < grid.N_grid; i++) {
                     Eps[gridId] = max(Eps[gridId], gs.len[grid.x[gridId]][grid.x[i]]);
@@ -502,6 +513,8 @@ public:
         }
 
         StayCnt = vector<i64>(EV.N_EV);
+
+        DeliveryDeadline = (tt < 0 || tt >= BestSuite.size() ? abs(tt) : BestSuite[tt]) * T_max / 20;
     }
 
     void SimulateCharging(i64 gridId, i64 startTm, i64 chargeNeeded, bool rollback, i64 evId = -1) {
@@ -705,13 +718,17 @@ public:
         return res;
     }
 
+    i64 GetDeliveryDeadline() {
+        return T_max; // DeliveryDeadline;
+    }
+
     i64 EsimateDeliveryCost(const EV_info& ev_i, const order_info& order_i, map<i64, i64>& orders, i64 evId, i64 orderId) {
         i64 now = SimulateDelivery(ev_i, order_i, orders, evId);
         EvTargetOrder[evId].insert(orderId);
         i64 nxt = SimulateDelivery(ev_i, order_i, orders, evId);
         EvTargetOrder[evId].erase(orderId);
 
-        if (nxt >= T_max - tm) {
+        if (nxt >= GetDeliveryDeadline() - tm) {
             return 1'000'000;
         }
 
@@ -851,12 +868,34 @@ private:
         }
     }
 
+    void OutputGridIncidents(const grid_info& grid_i) {
+        i64 balance = grid.N_grid * grid.C_grid_init + EV.N_EV * EV.C_EV_init;
+
+        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+            CalculateIncidents(grid_i, gridId);
+
+            cerr << "grid #" << gridId << ":";
+            for (auto [t, charge] : Incidents[gridId]) {
+                auto [start, end] = t;
+                cerr << " " << "[" << start << ", " << end << "]" << " -> " << charge << ";";
+            }
+            cerr << endl;
+
+            for (i64 qtm = tm; qtm < T_max; qtm++) {
+                i64 pw = GetPw(grid_i, gridId, qtm, tm);
+                balance += pw;
+            }
+        }
+        cerr << "balance = " << balance << endl;
+    }
+
     void FirstStat(const grid_info& grid_i, const EV_info& ev_i, const order_info& order_i) {
         cerr << tt << ": " << EvLimit << "/" << EV.N_EV << endl;
-
+        cerr << "gap = " << CalculateGap(grid_i) << endl;
         //OutputGridDistances(grid_i);
         //OutputGridPatternStat(grid_i);
         //OutputExcessiveGrid(grid_i);
+        //OutputGridIncidents(grid_i);
     }
 
 private:
@@ -895,6 +934,8 @@ private:
         if (isA) {
             return 0; // 8; // EV.N_EV / 2;
         }
+
+        //return 16;
 
         if (tt < 0) {
             return -tt;
@@ -939,7 +980,7 @@ private:
         EvsQueue.clear();
 
         for (i64 evId = 0; evId < ev_i.N_EV; ++evId) {
-            if (evId >= EvLimit) {
+            if (evId >= EvLimit) { //|| tm >= DeliveryDeadline) {
                 EvsChargeQueue.insert({ ev_i.c[evId].charge, evId });
                 continue;
             }
@@ -1143,9 +1184,10 @@ public:
             while (r - l > 1) {
                 i64 m = (l + r) / 2;
 
-                SimulateCharging(gridId, tm, m, false);
+                // todo: think about it
+                SimulateCharging(gridId, startTm, m, false);
                 auto [excess, buy] = CalculateLosses(grid_i, gridId, curTm, startTm - curTm);
-                SimulateCharging(gridId, tm, m, true);
+                SimulateCharging(gridId, startTm, m, true);
 
                 if (buy > etalonBuy) {
                     r = m;
@@ -1277,327 +1319,79 @@ public:
     }
 
 public:
-    void HandleEvsChargeQueue(const grid_info& grid_i, const EV_info& ev_i) {
-        for (auto [_, evId] : EvsChargeQueue) {
-            auto& ev = ev_i.c[evId];
+    void UpdateTargetGrid(const EV_info& ev_i, i64 evId, const order_info& order_i) {
+        auto& ev = ev_i.c[evId];
 
-            // keep moving
-            if (ev.u != ev.v) {
-                enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
-                continue;
-            }
+        if (ev.u != ev.v) {
+            return;
+        }
 
-            EvTargetGrid[evId] = -1;
+        vector<pair<i64, i64>> q;
 
-            // clear charging plan
-            ClearChargingPlan(evId);
+        for (i64 orderId : EvTargetOrder[evId]) {
+            q.push_back({ orderId, 0 });
+            q.push_back({ orderId, 1 });
 
-            // charge from excessive grid
-            if (EvChargeGrid[evId] == ev.u && Grids.count(ev.u) && ev.charge < EV.C_EV_max) {
-                i64 gridId = Grids[ev.u];
+        }
+        for (i64 orderId : EvCarringOrder[evId]) {
+            q.push_back({ orderId, 1 });
+        }
 
-                i64 safeCharge = min(EV.C_EV_max - ev.charge, CalculateSafeCharge(grid_i, gridId, tm, tm));
+        if (q.empty()) {
+            return;
+        }
 
-                if (safeCharge >= EV.V_EV_max || (tm > T_max * 5 / 10 && safeCharge > 0)) {
-                    SimulateCharging(gridId, tm, safeCharge, false, evId);
-                    enqueue(evId, "charge_from_grid " + to_string(ConsumptionByEv[evId][gridId][tm]));
+        vector<pair<i64, i64>> bestPath;
+        i64 bestLen = (i64)1e9;
+
+        sort(q.begin(), q.end());
+        do {
+            bool ok = true;
+            set<i64> drop;
+            for (auto [orderId, isDrop] : q) {
+                if (isDrop) {
+                    drop.insert(orderId);
                     continue;
                 }
-            }
-
-            EvChargeGrid[evId] = -1;
-
-            // find closest dropGrid
-            for (i64 qq = 0; qq < 1; qq++) {
-                i64 bestDropDist = (i64)1e15;
-                i64 bestDropGrid = -1;
-
-                for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-                    i64 len = gs.len[ev.u][grid_i.x[gridId]];
-
-                    auto [excess, buy] = CalculateLosses(grid_i, gridId, tm, len);
-                    if (excess > 0) {
-                        continue;
-                    }
-
-                    if (bestDropDist > len) {
-                        bestDropDist = len;
-                        bestDropGrid = gridId;
-                    }
-                }
-
-                if (bestDropGrid < 0) {
+                if (drop.count(orderId)) {
+                    ok = false;
                     break;
                 }
-
-                i64 safeDropCharge = CalculateSafeDrop(grid_i, bestDropGrid, tm, tm + bestDropDist);
-
-                i64 maxDropCharge = min(safeDropCharge, ev.charge - bestDropDist * EV.Delta_EV_move);
-                i64 maxDropCnt = maxDropCharge / EV.V_EV_max;
-                if (maxDropCnt <= 0) {
-                    break;
-                }
-
-                i64 bestExcessiveDist = (i64)1e15;
-                i64 bestExcessiveGrid = -1;
-
-                for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-                    i64 len = gs.len[grid_i.x[bestDropGrid]][grid_i.x[gridId]];
-                    auto [excess, buy] = CalculateLosses(grid_i, gridId, tm, bestDropDist + maxDropCnt + len);
-                    if (excess <= 0) {
-                        continue;
-                    }
-                    if (bestExcessiveDist > len) {
-                        bestExcessiveDist = len;
-                        bestExcessiveGrid = gridId;
-                    }
-                }
-
-                if (bestExcessiveGrid < 0) {
-                    break;
-                }
-
-                i64 dropCharge = min(safeDropCharge, ev.charge - (bestDropDist + bestExcessiveDist + 5) * EV.Delta_EV_move);
-                i64 dropCnt = dropCharge / EV.V_EV_max;
-                if (dropCnt <= 0) {
-                    break;
-                }
-
-                EvTargetGrid[evId] = gs.next[ev.u][grid_i.x[bestDropGrid]];
-                SimulateCharging(bestDropGrid, tm + bestDropDist, dropCharge, true, evId);
-
-                if (false) {
-                    SimulateCharging(bestExcessiveGrid, tm + bestDropDist + dropCnt + (dropCharge % EV.V_EV_max ? 1 : 0) + bestExcessiveDist, EV.C_EV_max - (ev.charge - (bestDropDist + bestExcessiveDist) * EV.Delta_EV_move - dropCharge), false, evId);
-                }
             }
-
-            if (tm > T_max * 9 / 10) {
-                EvTargetGrid[evId] = -1;
-            }
-
-            if (ev.u == EvTargetGrid[evId]) {
-                //cerr << "charge_to_grid " + to_string(-ConsumptionByEv[evId][grids[ev.u]][tm]) << endl;
-                enqueue(evId, "charge_to_grid " + to_string(-ConsumptionByEv[evId][Grids[ev.u]][tm]));
-                GridSumDonated[Grids[ev.u]] += -ConsumptionByEv[evId][Grids[ev.u]][tm];
+            if (!ok) {
                 continue;
             }
 
-            if (EvTargetGrid[evId] < 0) {
-                if (ev.charge + EV.V_EV_max > EV.C_EV_max) {
-                    continue;
-                }
-                i64 bestExcessiveDist = (i64)1e15;
-                i64 bestExcessiveGrid = -1;
+            i64 shift = ev_i.c[evId].u == ev_i.c[evId].v ? 0 : (ev_i.c[evId].u == EvTargetGrid[evId] ? ev_i.c[evId].dist_from_u : ev_i.c[evId].dist_to_v);
+            i64 x = ev_i.c[evId].u == ev_i.c[evId].v ? ev_i.c[evId].u : EvTargetGrid[evId];
 
-                for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-                    i64 len = gs.len[ev.u][grid_i.x[gridId]];
-                    auto [excess, buy] = CalculateLosses(grid_i, gridId, tm, len);
-                    if (excess <= 0) {
-                        continue;
-                    }
-                    if (bestExcessiveDist > len) {
-                        bestExcessiveDist = len;
-                        bestExcessiveGrid = gridId;
-                    }
-                }
+            i64 len = shift;
 
-                if (bestExcessiveGrid < 0) {
-                    continue;
-                }
-
-                if (ev.charge < bestExcessiveDist * EV.Delta_EV_move) {
-                    continue;
-                }
-
-                EvChargeGrid[evId] = grid_i.x[bestExcessiveGrid];
-                EvTargetGrid[evId] = gs.next[ev.u][grid_i.x[bestExcessiveGrid]];
-
-                if (false) {
-                    SimulateCharging(bestExcessiveGrid, tm + bestExcessiveDist, EV.C_EV_max - (ev.charge - bestExcessiveDist * EV.Delta_EV_move), false, evId);
-                }
+            for (auto [orderId, isDrop] : q) {
+                auto d = !isDrop ? order_i.w[Orders[orderId]] : order_i.z[Orders[orderId]];
+                len += gs.len[x][d];
+                x = d;
             }
 
-            if (EvTargetGrid[evId] == ev.u) {
-                continue;
+            if (bestLen > len) {
+                bestLen = len;
+                bestPath = q;
             }
 
-            enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
-        }
-    }
+        } while (next_permutation(q.begin(), q.end()));
 
-    void HandleEvsCharge(const grid_info& grid_i, const EV_info& ev_i, const order_info& order_i) {
-        for (auto [_, evId] : EvsChargeQueue) {
-            auto& ev = ev_i.c[evId];
+        /*
+        i64 greedy = SimulateDelivery(ev_i, order_i, Orders, evId);
+        cerr << "#" << evId << ": " << greedy - bestLen << "=" << greedy << "-" << bestLen << endl;
+        */
 
-            ClearChargingPlan(evId);
-            EvChargeGrid[evId] = -1;
-
-            if (ev.u != ev.v) {
-                enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
-                continue;
-            }
-
-            EvTargetGrid[evId] = -1;
+        if (bestPath.empty()) {
+            return;
         }
 
-        set<pair<i64, pair<pair<i64, i64>, pair<i64, i64>>>> chargingQueue;
-
-        vector<i64> eps(grid.N_grid);
-        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-            for (i64 i = 0; i < grid.N_grid; i++) {
-                eps[gridId] = max(eps[gridId], gs.len[grid_i.x[gridId]][grid_i.x[i]]);
-            }
-        }
-
-        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-            auto [etalonExcess, etalonBuy] = CalculateLosses(grid_i, gridId, tm);
-
-            for (auto [_, evId] : EvsChargeQueue) {
-                auto& ev = ev_i.c[evId];
-
-                i64 dest = ev.u == ev.v ? ev.u : EvTargetGrid[evId];
-                i64 shift = ev.u == dest ? ev.dist_from_u : ev.dist_to_v;
-
-                i64 len = gs.len[dest][grid_i.x[gridId]] + shift;
-
-                // todo: recheck it
-                if (ev.charge < len * EV.Delta_EV_move) {
-                    continue;
-                }
-
-                i64 safeCharge = CalculateSafeCharge(grid_i, gridId, tm, tm + len);
-                i64 safeDrop = CalculateSafeDrop(grid_i, gridId, tm, tm + len);
-
-                safeCharge = min(safeCharge, EV.C_EV_max - (ev.charge - len * EV.Delta_EV_move));
-                safeDrop = min(safeDrop, (ev.charge - len * EV.Delta_EV_move) - eps[gridId]);
-
-                // todo: recheck it
-                if (safeDrop < 0) {
-                    continue;
-                }
-
-                i64 charge = (safeCharge - safeDrop) / 2;
-
-                if (abs(charge) < EV.V_EV_max) {
-                    continue;
-                }
-
-                i64 value = -len * EV.Delta_EV_move;
-
-                if (charge > 0) {
-                    SimulateCharging(gridId, tm + len, charge, false);
-                    auto [excess, buy] = CalculateLosses(grid_i, gridId, tm);
-                    SimulateCharging(gridId, tm + len, charge, true);
-                    value += (etalonBuy - buy) * 2 + (etalonExcess - excess);
-                }
-                else {
-                    SimulateCharging(gridId, tm + len, -charge, true);
-                    auto [excess, buy] = CalculateLosses(grid_i, gridId, tm);
-                    SimulateCharging(gridId, tm + len, -charge, false);
-                    value += (etalonBuy - buy) * 2 + (etalonExcess - excess);
-                }
-
-                if (value < 0) {
-                    continue;
-                }
-
-                chargingQueue.insert({ value, {{len, charge}, {evId, gridId}} });
-            }
-        }
-
-
-        while (!chargingQueue.empty()) {
-            auto it = chargingQueue.begin();
-            i64 queueValue = it->first;
-            auto [queueLen, queueCharge] = it->second.first;
-            auto [evId, gridId] = it->second.second;
-
-            chargingQueue.erase(it);
-
-            if (EvChargeGrid[evId] >= 0) {
-                continue;
-            }
-
-            // make this a function
-            auto [etalonExcess, etalonBuy] = CalculateLosses(grid_i, gridId, tm);
-
-            auto& ev = ev_i.c[evId];
-
-            i64 dest = ev.u == ev.v ? ev.u : EvTargetGrid[evId];
-            i64 shift = ev.u == dest ? ev.dist_from_u : ev.dist_to_v;
-
-            i64 len = gs.len[dest][grid_i.x[gridId]] + shift;
-
-            // always true
-            if (ev.charge < len * EV.Delta_EV_move) {
-                continue;
-            }
-
-            i64 safeCharge = CalculateSafeCharge(grid_i, gridId, tm, tm + len);
-            i64 safeDrop = CalculateSafeDrop(grid_i, gridId, tm, tm + len);
-
-            safeCharge = min(safeCharge, EV.C_EV_max - (ev.charge - len * EV.Delta_EV_move));
-            safeDrop = min(safeDrop, (ev.charge - len * EV.Delta_EV_move) - eps[gridId]);
-
-            // always true
-            if (safeDrop < 0) {
-                continue;
-            }
-
-            i64 charge = (safeCharge - safeDrop) / 2;
-
-            if (abs(charge) < EV.V_EV_max) {
-                continue;
-            }
-
-            i64 value = -len * EV.Delta_EV_move;
-
-            if (charge > 0) {
-                SimulateCharging(gridId, tm + len, charge, false);
-                auto [excess, buy] = CalculateLosses(grid_i, gridId, tm);
-                SimulateCharging(gridId, tm + len, charge, true);
-                value += (etalonBuy - buy) * 2 + (etalonExcess - excess);
-            }
-            else {
-                SimulateCharging(gridId, tm + len, -charge, true);
-                auto [excess, buy] = CalculateLosses(grid_i, gridId, tm);
-                SimulateCharging(gridId, tm + len, -charge, false);
-                value += (etalonBuy - buy) * 2 + (etalonExcess - excess);
-            }
-
-            if (queueValue != value || queueCharge != charge) {
-                chargingQueue.insert({ value, {{len, charge}, {evId, gridId}} });
-                continue;
-            }
-
-            if (charge > 0) {
-                SimulateCharging(gridId, tm + len, charge, false, evId);
-            }
-            else {
-                SimulateCharging(gridId, tm + len, -charge, true, evId);
-            }
-
-            EvChargeGrid[evId] = grid_i.x[gridId];
-
-            if (ev.u != ev.v) {
-                continue;
-            }
-
-            if (ev.u != EvChargeGrid[evId]) {
-                EvTargetGrid[evId] = gs.next[ev.u][grid_i.x[gridId]];
-                enqueue(evId, "move " + to_string(EvTargetGrid[evId] + 1));
-                continue;
-            }
-
-            if (ConsumptionByEv[evId][gridId][tm] > 0) {
-                enqueue(evId, "charge_from_grid " + to_string(ConsumptionByEv[evId][gridId][tm]));
-                continue;
-            }
-            else if (ConsumptionByEv[evId][gridId][tm] < 0) {
-                enqueue(evId, "charge_to_grid " + to_string(-ConsumptionByEv[evId][gridId][tm]));
-                continue;
-            }
-        }
+        auto [orderId, isDrop] = *bestPath.begin();
+        auto d = !isDrop ? order_i.w[Orders[orderId]] : order_i.z[Orders[orderId]];
+        EvTargetGrid[evId] = gs.next[ev.u][d];
     }
 
     void HandleEvsQueue(const grid_info& grid_i, const EV_info& ev_i, const order_info& order_i) {
@@ -1635,10 +1429,13 @@ public:
                 }
 
                 if (pickedUp) {
-continue;
+                    continue;
                 }
             }
 
+            UpdateTargetGrid(ev_i, evId, order_i);
+
+            /*
             set<i64> dest;
             for (i64 orderId : EvTargetOrder[evId]) {
                 dest.insert(order_i.w[Orders[orderId]]);
@@ -1663,6 +1460,7 @@ continue;
                     EvTargetGrid[evId] = gs.next[ev.u][closestGrid];
                 }
             }
+            */
 
             if (EvTargetGrid[evId] < 0) {
                 EvTargetGrid[evId] = ev.u;
@@ -1672,66 +1470,6 @@ continue;
             if (Grids.count(ev.u) && (grid.DayType == 3 || ev.charge < (T_max - tm) * EV.Delta_EV_move) && ev.charge + EV.V_EV_max <= EV.C_EV_max) {
                 i64 chargeNeeded = grid.DayType == 3 ? EV.C_EV_max : min(EV.C_EV_max, (T_max - tm) * EV.Delta_EV_move);
                 i64 gridId = Grids[ev.u];
-
-                /*
-                i64 l = 0;
-                i64 r = chargeNeeded + 1; // todo : fix this!
-
-                auto [etalonExcess, etalonBuy] = CalculateLosses(grid_i, gridId, tm);
-
-                while (r - l > 1) {
-                    i64 m = (l + r) / 2;
-
-                    SimulateCharging(gridId, tm, m, false, evId);
-                    auto [excess, buy] = CalculateLosses(grid_i, gridId, tm);
-                    SimulateCharging(gridId, tm, m, true, evId);
-
-                    //cerr << buy << ">" << etalonBuy << endl;
-                    i64 val = (etalonExcess - excess) + (etalonBuy - buy) * 2;
-                    if (buy > etalonBuy) {
-                        //if (val < 0) {
-                        r = m;
-                    }
-                    else {
-                        l = m;
-                    }
-                }
-
-                i64 safeCharge = l;
-
-                i64 fastSafeCharge = min(chargeNeeded, CalculateSafeCharge(grid_i, gridId, tm, tm));
-                if (abs(safeCharge - fastSafeCharge) > 0) {
-                    cerr << safeCharge - fastSafeCharge << "=" << safeCharge << "-" << fastSafeCharge << endl;
-
-                    i64 c = grid_i.y[gridId];
-                    for (i64 qtm = tm; qtm < T_max; qtm++) {
-
-                        i64 delta = GetPw(grid_i, gridId, qtm, tm) - ConsumptionByGrid[gridId][qtm];
-
-                        i64 excess = delta - min(grid.V_grid_max, grid.C_grid_max - c);
-                        if (excess < 0) {
-                            excess = 0;
-                        }
-
-                        i64 buy = -delta - min(grid.V_grid_max, c);
-                        if (buy < 0) {
-                            buy = 0;
-                        }
-
-                        c += delta;
-                        if (c < 0) {
-                            c = 0;
-                        }
-                        if (c > grid.C_grid_max) {
-                            c = grid.C_grid_max;
-                        }
-
-                        cerr << qtm << ": " << c << "/" << excess << "/" << buy << "/" << ConsumptionByGrid[gridId][qtm] << "/" << delta << endl;
-                    }
-
-                }
-
-                */
 
                 i64 safeCharge = min(EV.C_EV_max - ev.charge, CalculateSafeCharge(grid_i, gridId, tm, tm));
 
@@ -1747,42 +1485,6 @@ continue;
                     continue;
                 }
             }
-
-            /*
-            // excessive charge
-            if (Grids.count(ev.u)) {
-                i64 gridId = Grids[ev.u];
-                i64 chargeNeeded = EV.C_EV_max - ev.charge;
-
-                i64 l = 0;
-                i64 r = chargeNeeded + 1; // todo : fix this!
-
-                auto [etalonExcess, etalonBuy] = CalculateLosses(grid_i, gridId, tm);
-
-                while (r - l > 1) {
-                    i64 m = (l + r) / 2;
-
-                    SimulateCharging(gridId, tm, m, false, evId);
-                    auto [excess, buy] = CalculateLosses(grid_i, gridId, tm);
-                    SimulateCharging(gridId, tm, m, true, evId);
-
-                    if (!excess) {
-                        r = m;
-                    }
-                    else {
-                        l = m;
-                    }
-                }
-
-                i64 safeCharge = l;
-
-                if (safeCharge > EV.V_EV_max) {
-                    SimulateCharging(gridId, tm, safeCharge, false, evId);
-                    enqueue(evId, "charge_from_grid " + to_string(ConsumptionByEv[evId][gridId][tm]));
-                    continue;
-                }
-            }
-            */
 
             if (EvTargetGrid[evId] == -1 || EvTargetGrid[evId] == ev.u) {
                 enqueue(evId, "stay");
@@ -1807,164 +1509,13 @@ public:
         cerr << tm << ": " << sumExcess << "/" << sumBuy << endl;
     }
 
-    void OutputPredictedGridState(const grid_info& grid_i) {
-        if (tm % 100 != 1) {
-            return;
-        }
-        i64 sumExcess = 0;
-        i64 sumBuy = 0;
-
-        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-
-            map<i64, i64> allExcess;
-            map<i64, i64> allBuy;
-
-            vector<i64> losses(T_max);
-
-            i64 c = grid_i.y[gridId];
-            for (i64 qtm = tm; qtm < T_max; qtm++) {
-                i64 delta = GetPw(grid_i, gridId, qtm, tm) - ConsumptionByGrid[gridId][qtm];
-
-                i64 excess = delta - min(grid.V_grid_max, grid.C_grid_max - c);
-                if (excess < 0) {
-                    excess = 0;
-                }
-
-                if (excess > 0) {
-                    allExcess[qtm] = excess;
-                }
-
-                i64 buy = -delta - min(grid.V_grid_max, c);
-                if (buy < 0) {
-                    buy = 0;
-                }
-
-                if (buy > 0) {
-                    allBuy[qtm] = buy;
-                }
-
-                if (buy > 0 && excess > 0) {
-                    throw 1;
-                }
-
-                losses[qtm] = -buy + excess;
-
-                c += delta;
-                if (c < 0) {
-                    c = 0;
-                }
-                if (c > grid.C_grid_max) {
-                    c = grid.C_grid_max;
-                }
-            }
-
-            auto safeCharge = CalculateSafeCharge(grid_i, gridId, tm, tm);
-            auto safeDrop = CalculateSafeDrop(grid_i, gridId, tm, tm);
-
-            vector<pair<pair<i64, i64>, i64>> q; // [start; stop] -> charge
-
-            i64 sum = 0;
-            i64 start = 0;
-            for (i64 qtm = tm; qtm < T_max; qtm++) {
-                if (!losses[qtm]) {
-                    if (sum) {
-                        q.push_back({ {start, qtm - 1}, sum });
-                    }
-                    sum = 0;
-                    start = 0;
-                    continue;
-                }
-
-                if (!sum) {
-                    start = qtm;
-                }
-                sum += losses[qtm];
-            }
-
-            if (sum) {
-                q.push_back({ { start, T_max - 1 }, sum });
-            }
-
-            if (q.empty()) {
-                cerr << "grid #" << gridId << " is fine" << endl;
-                continue;
-            }
-
-            cerr << "grid #" << gridId << ": ";
-            cerr << -safeCharge << "/" << safeDrop << ": ";
-            for (auto [t, sum] : q) {
-                auto [start, stop] = t;
-                if (sum < 0) {
-                    sumBuy += -sum;
-                }
-                else {
-                    sumExcess += sum;
-                }
-                cerr << " [" << start << ", " << stop << "]" << " -> " << sum << ";";
-            }
-            cerr << endl;
-
-            /*
-            if (allExcess.empty() && allBuy.empty()) {
-                auto safeCharge = CalculateSafeCharge(grid_i, gridId, tm, tm);
-                auto safeDrop = CalculateSafeDrop(grid_i, gridId, tm, tm);
-
-                cerr << "grid #" << gridId << ": " << -safeCharge << "/" << safeDrop << endl;
-                continue;
-            }
-
-            auto outputLosses = [&gridId](map<i64, i64>& q, i64 m) {
-                auto it = q.begin();
-                cerr << "grid #" << gridId << "(" << it->first << ")" << ":";
-                i64 sum = 0;
-                while (it != q.end()) {
-                    if (it != q.begin()) {
-                        auto pit = it;
-                        pit--;
-                        if (pit->first + 1 != it->first) {
-                            break;
-                        }
-                    }
-                    sum += it->second * m;
-                    cerr << " " << it->second * m;
-                    it++;
-                }
-                cerr << " = " << sum;
-                cerr << endl;
-                return 0;
-            };
-
-            if (!allExcess.empty() && !allBuy.empty()) {
-                if (allExcess.begin()->first < allBuy.begin()->first) {
-                    outputLosses(allExcess, 1);
-                }
-                else if (allExcess.begin()->first > allBuy.begin()->first) {
-                    outputLosses(allBuy, -1);
-                }
-                else {
-                    // excess and buy on the same time is impossible
-                    throw 1;
-                }
-            }
-            else if (!allExcess.empty()) {
-                outputLosses(allExcess, 1);
-            }
-            else if (!allBuy.empty()) {
-                outputLosses(allBuy, -1);
-            }
-            */
-        }
-
-        cerr << sumExcess << "/" << sumBuy << endl;
-    }
-
-    void CalculateIncidents(const grid_info& grid_i, i64 gridId) {
+    void CalculateIncidents(const grid_info& grid_i, i64 gridId, i64 stm = 0) {
         Incidents[gridId].clear();
 
         vector<i64> losses(T_max);
 
         i64 c = grid_i.y[gridId];
-        for (i64 qtm = tm; qtm < T_max; qtm++) {
+        for (i64 qtm = stm ? stm : tm; qtm < T_max; qtm++) {
             i64 delta = GetPw(grid_i, gridId, qtm, tm) - ConsumptionByGrid[gridId][qtm];
 
             i64 excess = delta - min(grid.V_grid_max, grid.C_grid_max - c);
@@ -1994,7 +1545,7 @@ public:
 
         i64 sum = 0;
         i64 start = 0;
-        for (i64 qtm = tm; qtm < T_max; qtm++) {
+        for (i64 qtm = stm ? stm : tm; qtm < T_max; qtm++) {
             if (!losses[qtm]) {
                 if (sum) {
                     Incidents[gridId].push_back({ {start, qtm - 1}, sum });
@@ -2013,100 +1564,18 @@ public:
         if (sum) {
             Incidents[gridId].push_back({ { start, T_max - 1 }, sum });
         }
-    }
 
-    bool IsBuying(i64 gridId) {
-        for (auto [_, charge] : Incidents[gridId]) {
-            if (charge > 0) {
-                return true;
-            }
-        }
-        return false;
-    }
 
-    bool IsExcessive(i64 gridId) {
-        for (auto [_, charge] : Incidents[gridId]) {
-            if (charge < 0) {
-                return true;
-            }
-        }
-        return false;
-    }
+        if (false && grid.DayType != 3) {
+            for (i64 i = 0; i < Incidents[gridId].size(); i++) {
+                auto [t, charge] = Incidents[gridId][i];
+                auto [start, end] = t;
 
-    void MatchMixedGrids(const grid_info& grid_i, const EV_info& ev_i) {
-        set<pair<i64, pair<i64, i64>>> q;
-
-        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-            if (!IsBuying(gridId) || !IsExcessive(gridId)) {
-                continue;
-            }
-
-            for (i64 evId = 0; evId < EV.N_EV; evId++) {
-                auto& ev = ev_i.c[evId];
-                i64 dest = ev.u == ev.v ? ev.u : EvTargetGrid[evId];
-                i64 shift = ev.u == EvTargetGrid[evId] ? ev.dist_from_u : ev.dist_to_v;
-                q.insert({ gs.len[dest][grid_i.x[gridId]] + shift, {evId, gridId} });
-            }
-        }
-
-        for (auto [len, t] : q) {
-            auto [evId, gridId] = t;
-            if (EvChargeGrid[evId] >= 0) {
-                continue;
-            }
-
-            if (!IsBuying(gridId) || !IsExcessive(gridId)) {
-                continue;
-            }
-
-            EvChargeGrid[evId] = grid_i.x[gridId];
-
-            auto& ev = ev_i.c[evId];
-            i64 evCharge = ev.charge - len * EV.Delta_EV_move;
-            if (evCharge < 0) {
-                continue;
-            }
-
-            i64 gridCharge = grid_i.y[gridId];
-            for (i64 qtm = tm; qtm < T_max; qtm++) {
-                i64 charge = 0;
-                i64 delta = GetPw(grid_i, gridId, qtm, tm) - ConsumptionByGrid[gridId][qtm];
-
-                i64 excess = delta - min(grid.V_grid_max, grid.C_grid_max - gridCharge);
-                if (excess < 0) {
-                    excess = 0;
-                }
-                if (excess > 0 && qtm >= tm + len) {
-                    charge = min(excess, min(EV.V_EV_max, EV.C_EV_max - evCharge));
-                }
-
-                i64 buy = -delta - min(grid.V_grid_max, gridCharge);
-                if (buy < 0) {
-                    buy = 0;
-                }
-                if (buy > 0 && qtm >= tm + len) {
-                    charge = max(-buy, -min(EV.V_EV_max, evCharge));
-                }
-
-                //if (charge) {
-                //    cerr << "#" << gridId << "/" << "#" << evId << ": " << gridCharge << "/" << evCharge << ": " << delta << "/" << charge << endl;
-                //}
-
-                evCharge += charge;
-                ConsumptionByEv[evId][gridId][qtm] += charge;
-                ConsumptionByGrid[gridId][qtm] += charge;
-                delta -= charge;
-
-                gridCharge += delta;
-                if (gridCharge < 0) {
-                    gridCharge = 0;
-                }
-                if (gridCharge > grid.C_grid_max) {
-                    gridCharge = grid.C_grid_max;
+                if (start - tm > 100) {
+                    Incidents[gridId].resize(i);
+                    break;
                 }
             }
-
-            CalculateIncidents(grid_i, gridId);
         }
     }
 
@@ -2131,8 +1600,8 @@ public:
         }
     }
 
-    void UpdateGridChargePrediction(const grid_info& grid_i, i64 gridId) {
-        CalculateIncidents(grid_i, gridId);
+    void UpdateGridChargePrediction(const grid_info& grid_i, i64 gridId, i64 stm = 0) {
+        CalculateIncidents(grid_i, gridId, stm);
 
         GridLimits[gridId] = { -CalculateSafeCharge(grid_i, gridId, tm, tm), CalculateSafeDrop(grid_i, gridId, tm, tm) };
 
@@ -2149,30 +1618,22 @@ public:
         GridChargeNeeded[gridId] = min(GridChargeNeeded[gridId], GridLimits[gridId].second);
     }
 
-    void CalculateLimits(const grid_info& grid_i, const EV_info& ev_i) {
-        /*
-        for (auto [_, evId] : EvsChargeQueue) {
-            ClearConsumptionByEv(evId);
-        }
-        */
-
+    void CalculateChargingPlan(const grid_info& grid_i, const EV_info& ev_i) {
         for (auto [_, evId] : EvsChargeQueue) {
             if (ev_i.c[evId].u != ev_i.c[evId].v) {
                 continue;
             }
-            ClearChargingPlan(evId);
+            if (grid.DayType != 3) {
+                ClearConsumptionByEv(evId);
+            }
+            else {
+                ClearChargingPlan(evId);
+            }
         }
 
         for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
             UpdateGridChargePrediction(grid_i, gridId);
         }
-
-        /*
-        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-            cerr << gridId << ": " << "[" << GridLimits[gridId].first << ", " << GridLimits[gridId].second << "] ";
-            cerr << GridNextLoss[gridId] << "/" << GridChargeNeeded[gridId] << endl;
-        }
-        */
 
         set<pair<pair<i64, i64>, pair<i64, i64>>> q;
         for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
@@ -2233,7 +1694,7 @@ public:
             i64 bestSumLen = 0;
             i64 bestDeltaTm = 0;
 
-            for (i64 aGridId = -1; aGridId < grid.N_grid; aGridId++) {
+            for (i64 aGridId = -1; aGridId < max(0ll, grid.N_grid); aGridId++) {
                 if (gridId == aGridId) {
                     continue;
                 }
@@ -2263,7 +1724,8 @@ public:
                     }
 
                     deltaTm = len;
-                } else {
+                }
+                else {
                     i64 aTm = tm;
 
                     i64 aLen = gs.len[ev.u][grid_i.x[aGridId]];
@@ -2276,7 +1738,7 @@ public:
 
                     i64 bLen = gs.len[grid_i.x[aGridId]][grid_i.x[gridId]];
                     if (chargeNeeded < 0) {
-                        // additionalCharge = CalculateSafeCharge(grid_i, aGridId, tm, aTm);
+                        //additionalCharge = CalculateSafeCharge(grid_i, aGridId, tm, aTm);
                         additionalCharge = -GridLimits[aGridId].first;
                         additionalCharge = min(additionalCharge, EV.C_EV_max - evCharge);
                     }
@@ -2335,7 +1797,7 @@ public:
 
                 i64 val = -sumLen * EV.Delta_EV_move + 2 * (etalonBuy - buy) + (etalonExcess - excess);
                 val *= 10;
-                
+
                 evCharge += chargeNeeded;
 
                 if (grid.DayType == 3) {
@@ -2380,7 +1842,8 @@ public:
             }
 
             //if (!GridNextLoss[gridId]) {
-            //    cerr << "#" << evId << "->" << "#" << gridId << ": " << bestVal << "/" << bestSumLen << "/" << bestChargeNeeded << endl;
+            //if (tm % 50 == 1) {
+            //    cerr << tm << ": " << "#" << evId << "->" << "#" << gridId << ": " << bestVal << "/" << bestSumLen << "/" << bestChargeNeeded << endl;
             //}
 
             if (bestAdditionalGridId >= 0) {
@@ -2414,68 +1877,26 @@ public:
         }
     }
 
-    void HandleCustomEvs(const grid_info& grid_i, const EV_info& ev_i) {
+    void HandleEvsChargeQueue(const grid_info& grid_i, const EV_info& ev_i) {
         if (!tm) {
             return;
         }
 
         //if (tm % (T_max / grid.N_div) == 1) {
         //if ((tt >= 0 && tm % 10 == 1) || (tt < 0 && tm % 200 == 1)) {
+        //set<i64> z = { 1, 11, 21 };
         set<i64> z = { 1, 11, 21 };
         set<i64> w = { 1, 51, 101, 151, 201, 401, 601, 801, 901 };
-        if ((z.count(tm % 50) && grid.DayType % 2 == 1 && tt >= 0) || w.count(tm)) {
-            //cerr << tm << endl;
-            //for (i64 evId = 0; evId < EV.N_EV; evId++) {
-            //    cerr << "#" << evId << ": " << ev_i.c[evId].charge << endl;
-            //}
-            //for (auto [_, evId] : EvsChargeQueue) {
-            //    ClearChargingPlan(evId);
-            //}
-
-            if (false && tm == 1) {
-                i64 balance = grid.N_grid * grid.C_grid_init + EV.N_EV * EV.C_EV_init;
-
-                for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-                    CalculateIncidents(grid_i, gridId);
-
-                    cerr << "grid #" << gridId << ":";
-                    for (auto [t, charge] : Incidents[gridId]) {
-                        auto [start, end] = t;
-                        cerr << " " << "[" << start << ", " << end << "]" << " -> " << charge << ";";
-                    }
-                    cerr << endl;
-
-                    for (i64 qtm = tm; qtm < T_max; qtm++) {
-                        i64 pw = GetPw(grid_i, gridId, qtm, tm);
-                        balance += pw;
-                    }
-                }
-                cerr << "balance = " << balance << endl;
-            }
-
-            /*
-            for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-                CalculateIncidents(grid_i, gridId);
-
-                bool sumExcess = 0;
-                for (auto [t, charge] : Incidents[gridId]) {
-                    if (charge > 0) {
-                        sumExcess += charge;
-                    }
-                }
-
-                if (!sumExcess) {
-                    for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-                        Eps[gridId] = 0;
-                    }
-                }
-            }
-            */
-
-            CalculateLimits(grid_i, ev_i);
-
-            //MatchMixedGrids(grid_i, ev_i);
+        //if ((z.count(tm % 50) && grid.DayType % 2 == 1 && tt >= 0) || w.count(tm)) {
+        //if (grid.DayType % 2 == 0 || z.count(tm % 50)) {
+        //if (grid.DayType != 3 || z.count(tm % 50)) {
+        if (false) {
+            CalculateChargingPlan(grid_i, ev_i);
         }
+
+        //if (tm % 50 == 1) {
+        //    OutputGridIncidents(grid_i);
+        //}
 
         for (auto [_, evId] : EvsChargeQueue) {
             auto& ev = ev_i.c[evId];
@@ -2521,7 +1942,12 @@ public:
     void command(const grid_info& grid_i, const EV_info& ev_i, const order_info& order_i) {
         if (!tm) {
             FirstStat(grid_i, ev_i, order_i);
-            //cerr << gs.diameter << endl;
+            tm += 1;
+            return;
+        }
+
+        if (tm % 1000 == 1) {
+            MatchIncidents(grid_i, ev_i);
         }
 
         TestGridsPwBalance(grid_i);
@@ -2533,12 +1959,7 @@ public:
         UpdateOrdersState(ev_i, order_i);
         AssignOrders(ev_i, order_i);
 
-        //OutputPredictedGridState(grid_i);
-
-        //HandleEvsChargeQueue(grid_i, ev_i);
-        //HandleEvsCharge(grid_i, ev_i, order_i);
-
-        HandleCustomEvs(grid_i, ev_i);
+        HandleEvsChargeQueue(grid_i, ev_i);
         HandleEvsQueue(grid_i, ev_i, order_i);
 
         PostUpdateStat(ev_i);
@@ -2561,7 +1982,7 @@ public:
 
 public:
     pair<double, double> SimulateProccess() {
-        mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
+        mt19937 rng((unsigned int)chrono::steady_clock::now().time_since_epoch().count());
         uniform_int_distribution<i64> dist(0ll, std::numeric_limits<i64>::max());
 
         grid_info grid_i;
@@ -2862,7 +2283,7 @@ public:
             sumGridCharge += grid_i.y[gridId];
         }
 
-        i64 eleScore = sumEvCharge + sumGridCharge - gamma * sumPwBuy;
+        i64 eleScore = sumEvCharge + sumGridCharge - (i64)(gamma * sumPwBuy);
 
         i64 left = 0;
         i64 picked = 0;
@@ -2881,12 +2302,272 @@ public:
         cerr << transScore << " " << eleScore << endl;
         cerr << (transScore - S_ref_trans) << " * " << (eleScore - S_ref_ele) << " = " << (transScore - S_ref_trans) * (eleScore - S_ref_ele) << endl;
 
-        return { transScore , eleScore };
+        return { (double)transScore , (double)eleScore };
+    }
+
+    i64 CalculateGap(const grid_info& grid_i) {
+        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+            CalculateIncidents(grid_i, gridId);
+        }
+
+        i64 balance = 0;
+        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+            for (auto [_, charge] : Incidents[gridId]) {
+                balance += charge;
+            }
+        }
+
+        const i64 avgMoves = 0;
+        i64 evsCharge = (EV.C_EV_init - avgMoves * EV.Delta_EV_move) * EV.N_EV;
+        i64 evsCapacity = (EV.C_EV_max - (EV.C_EV_init - avgMoves * EV.Delta_EV_move)) * EV.N_EV;
+
+        if (balance > 0) {
+            return max(0ll, balance - evsCapacity);
+        }
+        else {
+            return -max(0ll, -balance - evsCharge);
+        }
+    }
+
+    i64 GetEvFreeTm(i64 evId, i64 qtm) {
+        i64 res = qtm;
+
+        for (auto [_, t] : ConsumptionByEv[evId]) {
+            for (auto [ftm, charge] : t) {
+                if (ftm < qtm) {
+                    continue;
+                }
+                if (!charge) {
+                    continue;
+                }
+                res = max(res, ftm + 1);
+            }
+        }
+
+        return res;
+    }
+
+    bool IsBuying(i64 gridId) {
+        for (auto [_, charge] : Incidents[gridId]) {
+            if (charge > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool IsExcessive(i64 gridId) {
+        for (auto [_, charge] : Incidents[gridId]) {
+            if (charge < 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void MatchMixedGrids(const grid_info& grid_i, const EV_info& ev_i) {
+        set<pair<i64, pair<i64, i64>>> q;
+
+        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+            CalculateIncidents(grid_i, gridId);
+
+            if (!IsBuying(gridId) || !IsExcessive(gridId)) {
+                continue;
+            }
+
+            MixedGrids.insert(gridId);
+
+            for (i64 evId = 0; evId < EV.N_EV; evId++) {
+                auto& ev = ev_i.c[evId];
+                i64 dest = ev.u == ev.v ? ev.u : EvTargetGrid[evId];
+                i64 shift = ev.u == EvTargetGrid[evId] ? ev.dist_from_u : ev.dist_to_v;
+                q.insert({ gs.len[dest][grid_i.x[gridId]] + shift, {evId, gridId} });
+            }
+        }
+
+        for (auto [len, t] : q) {
+            auto [evId, gridId] = t;
+            if (EvChargeGrid[evId] >= 0) {
+                continue;
+            }
+
+            if (!IsBuying(gridId) || !IsExcessive(gridId)) {
+                continue;
+            }
+
+            auto& ev = ev_i.c[evId];
+            i64 evCharge = ev.charge - len * EV.Delta_EV_move;
+            if (evCharge < 0) {
+                continue;
+            }
+
+            EvChargeGrid[evId] = grid_i.x[gridId];
+
+            i64 gridCharge = grid_i.y[gridId];
+            for (i64 qtm = tm; qtm < T_max; qtm++) {
+                i64 charge = 0;
+                i64 delta = GetPw(grid_i, gridId, qtm, tm) - ConsumptionByGrid[gridId][qtm];
+
+                i64 excess = delta - min(grid.V_grid_max, grid.C_grid_max - gridCharge);
+                if (excess < 0) {
+                    excess = 0;
+                }
+                if (excess > 0 && qtm >= tm + len) {
+                    charge = min(excess, min(EV.V_EV_max, EV.C_EV_max - evCharge));
+                }
+
+                i64 buy = -delta - min(grid.V_grid_max, gridCharge);
+                if (buy < 0) {
+                    buy = 0;
+                }
+                if (buy > 0 && qtm >= tm + len) {
+                    charge = max(-buy, -min(EV.V_EV_max, evCharge));
+                }
+
+                //if (charge) {
+                //    cerr << "#" << gridId << "/" << "#" << evId << ": " << gridCharge << "/" << evCharge << ": " << delta << "/" << charge << endl;
+                //}
+
+
+                evCharge += charge;
+                ConsumptionByEv[evId][gridId][qtm] += charge;
+                ConsumptionByGrid[gridId][qtm] += charge;
+                delta -= charge;
+
+                gridCharge += delta;
+                if (gridCharge < 0) {
+                    gridCharge = 0;
+                }
+                if (gridCharge > grid.C_grid_max) {
+                    gridCharge = grid.C_grid_max;
+                }
+            }
+
+            i64 cnt = 1;
+            for (i64 qtm = tm; qtm < T_max; qtm++) {
+                if (ConsumptionByEv[evId][gridId][qtm] && !ConsumptionByEv[evId][gridId][qtm - 1]) {
+                    for (i64 i = 1; i <= cnt; i++) {
+                        ConsumptionByEv[evId][gridId][qtm - i] = EV.V_EV_max * (ConsumptionByEv[evId][gridId][qtm] > 0 ? 1 : -1);
+                    }
+                    cnt += 4;
+                }
+            }
+
+            CalculateIncidents(grid_i, gridId);
+        }
+    }
+
+    void MatchIncidents(const grid_info& grid_i, const EV_info& ev_i) {
+        for (i64 evId = 0; evId < EV.N_EV; evId++) {
+            ClearChargingPlan(evId);
+        }
+
+        cerr << "Before" << endl;
+        OutputGridIncidents(grid_i);
+
+        MatchMixedGrids(grid_i, ev_i);
+
+        vector<i64> evTm(EV.N_EV, tm);
+        vector<i64> evPos(EV.N_EV);
+        vector<i64> evCharge(EV.N_EV);
+
+        for (i64 evId = 0; evId < EV.N_EV; evId++) {
+            evTm[evId] = GetEvFreeTm(evId, tm);
+            if (evTm[evId] != tm) {
+                evTm[evId] = T_max;
+                continue;
+            }
+
+            i64 shift = ev_i.c[evId].u == ev_i.c[evId].v ? 0 : (ev_i.c[evId].u == EvTargetGrid[evId] ? ev_i.c[evId].dist_from_u : ev_i.c[evId].dist_to_v);
+            evTm[evId] = tm + shift;
+            evPos[evId] = ev_i.c[evId].u == ev_i.c[evId].v ? ev_i.c[evId].u : EvTargetGrid[evId];
+            evCharge[evId] = ev_i.c[evId].charge - shift * EV.Delta_EV_move;
+        }
+
+        bool lastMode = false;
+        while (true) {
+            set<pair<double, pair<i64, i64>>> queue;
+            for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+                for (i64 evId = 0; evId < EV.N_EV; evId++) {
+                    queue.insert({ -1e15, {evId, gridId} });
+                }
+            }
+
+            bool reset = false;
+            while (!reset && !queue.empty()) {
+                auto [etVal, t] = *queue.begin();
+                etVal *= -1;
+                auto [evId, gridId] = t;
+                queue.erase(queue.begin());
+
+                i64 len = gs.len[evPos[evId]][grid_i.x[gridId]];
+                if (evCharge[evId] < len * EV.Delta_EV_move) {
+                    continue;
+                }
+
+                UpdateGridChargePrediction(grid_i, gridId, evTm[evId] + len);
+                if (!GridNextLoss[gridId]) {
+                    continue;
+                }
+
+                i64 chargeNeeded = GridNextLoss[gridId];
+                if (chargeNeeded < 0) {
+                    i64 chargeAvailable = max(0ll, evCharge[evId] - len * EV.Delta_EV_move - (!lastMode ? Eps[gridId] * EV.Delta_EV_move : 0));
+                    chargeNeeded = -min(-chargeNeeded, CalculateSafeDrop(grid_i, gridId, tm, evTm[evId] + len));
+                    chargeNeeded = -min(-chargeNeeded, chargeAvailable);
+                }
+                else if (chargeNeeded > 0) {
+                    i64 chargeAvailable = EV.C_EV_max - (evCharge[evId] - len * EV.Delta_EV_move);
+                    chargeNeeded = min(chargeNeeded, CalculateSafeCharge(grid_i, gridId, tm, evTm[evId] + len));
+                    chargeNeeded = min(chargeNeeded, chargeAvailable);
+                }
+
+                auto [etalonExcess, etalonBuy] = CalculateLosses(grid_i, gridId, tm, evTm[evId] + len);
+                SimulateCharging(gridId, evTm[evId] + len, chargeNeeded, false);
+                auto [excess, buy] = CalculateLosses(grid_i, gridId, tm, evTm[evId] + len);
+                SimulateCharging(gridId, evTm[evId] + len, chargeNeeded, true);
+
+                double val = -len * EV.Delta_EV_move + 2 * (etalonBuy - buy) + (etalonExcess - excess);
+                val /= len + 1e-8;
+
+                if (val <= 0) {
+                    continue;
+                }
+
+                if (val != etVal) {
+                    queue.insert({ -val, {evId, gridId} });
+                    continue;
+                }
+
+                //cerr << GridNextLoss[gridId] << "/" << chargeNeeded << endl;
+                //cerr << evTm[evId] + len << ": " << "#" << evId << "->" << "#" << gridId << ": " << len << "/" << chargeNeeded << "/" << (etalonExcess - excess) << "/" << (etalonBuy - buy) << endl;
+
+                SimulateCharging(gridId, evTm[evId] + len, chargeNeeded, false, evId);
+                evCharge[evId] -= len * EV.Delta_EV_move;
+                evCharge[evId] += chargeNeeded;
+                evPos[evId] = grid_i.x[gridId];
+                evTm[evId] = GetEvFreeTm(evId, evTm[evId]);
+
+                //cerr << evTm[evId] << ": " << "#" << evId << " at " << "#" << evPos[evId] << " charge " << evCharge[evId] << endl;
+                reset = true;
+            }
+
+            if (!reset) {
+                if (!lastMode) {
+                    lastMode = true;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        cerr << "After" << endl;
+        OutputGridIncidents(grid_i);
     }
 };
 
 double CalculateScoreB(vector<pair<double, double>>& Ans, const B& prob) {
-    Ans.push_back({ prob.S_ref_trans, prob.S_ref_ele });
+    Ans.push_back({ (double)prob.S_ref_trans, (double)prob.S_ref_ele });
 
     std::sort(Ans.begin(), Ans.end());
     std::vector<std::pair<double, double> > a;
@@ -2929,7 +2610,7 @@ void CalculateBestSuite(const vector<pair<pair<double, double>, i64>>& scores, c
         return;
     }
 
-    if (c >= scores.size()) {
+    if (c >= (i64)scores.size()) {
         return;
     }
 
@@ -2975,8 +2656,8 @@ int main() {
     double predictedBestScore = 0.0;
     vector<pair<pair<double, double>, i64>> predictedScores;
 
-    //if (prob.grid.DayType != 3 && !isA) {
-    if (!isA) {
+    if (prob.grid.DayType != 3 && !isA) {
+        //if (!isA) {
         for (i64 i = 1; i < prob.EV.N_EV; i++) {
             str = new TStrategy(prob, gs, -i, isA);
             str->initialize();
@@ -3001,11 +2682,9 @@ int main() {
         CalculateBestSuite(predictedScores, prob, 0, curSuite, BestSuite, predictedBestScore);
     }
 
-    /*
     if (prob.grid.DayType == 3) {
         BestSuite.clear();
     }
-    */
 
     for (i64 n = 0; n < N_solution; ++n) {
         stringstream ss;
@@ -3094,7 +2773,7 @@ int main() {
 
         //cerr << prob.grid.N_grid << "/" << prob.EV.N_EV << endl;
         cerr << pwExcess << "/" << pwBuy << "|" << sumEvCharge << "+" << sumGridCharge << "=" << sumEvCharge + sumGridCharge << endl;
-        cerr << "Succ/Miss = " << str->Succ << "/" << str->Miss << endl;
+        //cerr << "Succ/Miss = " << str->Succ << "/" << str->Miss << endl;
 
         if (!isA) {
             cerr << left.size() << "/" << picked.size() << "/" << dropped.size() << endl;
