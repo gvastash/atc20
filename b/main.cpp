@@ -58,9 +58,12 @@ struct graph_data {
 };
 
 struct grid_data {
-    i64 DayType;
-    i64 N_div, N_pattern, sigma_ele, Delta_event;
-    double p_event;
+    i64 DayType = 0;
+    i64 N_div = 0;
+    i64 N_pattern = 0;
+    i64 sigma_ele = 0;
+    i64 Delta_event = 0;
+    double p_event = 0.0;
     std::vector<std::vector<i64>> pw_predict;
     i64 N_grid, C_grid_init, C_grid_max, V_grid_max;
     std::vector<i64> x, pattern;
@@ -104,8 +107,14 @@ struct grid_data {
 };
 
 struct EV_data {
-    i64 N_EV, C_EV_init, C_EV_max, V_EV_max, N_trans_max, Delta_EV_move;
+    i64 N_EV = 0;
+    i64 C_EV_init = 0;
+    i64 C_EV_max = 0;
+    i64 V_EV_max = 0;
+    i64 N_trans_max = 0;
+    i64 Delta_EV_move = 0;
     std::vector<i64> pos;
+    EV_data() = default;
     EV_data(std::istream& src, bool isA) {
         if (isA) {
             src >> N_EV >> C_EV_init >> C_EV_max >> V_EV_max >> Delta_EV_move;
@@ -225,7 +234,7 @@ struct carinfo {
 };
 
 struct grid_info {
-    i64 N_grid;
+    i64 N_grid = 0;
     std::vector<i64> x, y;
     std::vector<i64> pw_actual;
     std::vector<i64> pw_excess, pw_buy;
@@ -247,7 +256,7 @@ struct grid_info {
 };
 
 struct EV_info {
-    i64 N_EV;
+    i64 N_EV = 0;
     std::vector<carinfo> c;
     EV_info() = default;
     EV_info(i64 N_EV)
@@ -271,8 +280,6 @@ struct order_info {
     std::vector<i64> z;
     std::vector<i64> state;
     std::vector<i64> time;
-
-    //order_info() = default;
 
     void load(std::istream& src, [[maybe_unused]] i64 V = 225, [[maybe_unused]] i64 T_last = 900) {
         src >> N_order;
@@ -426,7 +433,7 @@ public:
     vector<map<i64, map<i64, i64>>> ConsumptionByEv;
 
 public:
-    i64 GridSumBuy = 0;
+    vector<i64> GridSumBuy;
 
 public:
     vector<vector<pair<pair<i64, i64>, i64>>> Incidents;
@@ -435,9 +442,6 @@ public:
     vector<pair<i64, i64>> GridLimits;
     vector<i64> GridNextLoss;
     vector<i64> GridChargeNeeded;
-
-public:
-    vector<i64> StayCnt;
 
 public:
     vector<pair<double, double>> Scores;
@@ -463,13 +467,13 @@ public:
         EvTargetGrid = vector<i64>(EV.N_EV, -1);
         EvChargeGrid = vector<i64>(EV.N_EV, -1);
 
+        GridSumBuy = vector<i64>(grid.N_grid);
+
         Incidents = vector<vector<pair<pair<i64, i64>, i64>>>(grid.N_grid);
 
         GridLimits = vector<pair<i64, i64>>(grid.N_grid);
         GridNextLoss = vector<i64>(grid.N_grid);
         GridChargeNeeded = vector<i64>(grid.N_grid);
-
-        StayCnt = vector<i64>(EV.N_EV);
     }
 
     void SimulateCharging(i64 gridId, i64 startTm, i64 chargeNeeded, bool rollback, i64 evId = -1) {
@@ -646,6 +650,13 @@ public:
     }
 
 private:
+    void PreUpdate(const grid_info& grid_i, const EV_info& ev_i, const order_info& order_i) {
+        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+            GridSumBuy[gridId] += grid_i.pw_buy[gridId];
+        }
+    }
+
+private:
     i64 GetEvLimit() {
         if (isA) {
             return 0;
@@ -677,7 +688,7 @@ private:
     }
 
 private:
-    void ConstructEvsQueues(const EV_info& ev_i, const grid_info& grid_i) {
+    void ConstructEvsQueues(const EV_info& ev_i) {
         if (!tm) {
             for (i64 evId = 0; evId < EV.N_EV; evId++) {
                 if (EvChargeGrid[evId] < 0) {
@@ -704,21 +715,23 @@ private:
             return;
         }
 
-        for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
-            GridSumBuy += grid_i.pw_buy[gridId];
-        }
-
         if (grid.DayType == 1 && !EvsQueue.empty() && PredictedScore != make_pair(0.0, 0.0)) {
+            i64 sumBuy = 0;
+            for (i64 gridId = 0; gridId < grid.N_grid; gridId++) {
+                sumBuy += GridSumBuy[gridId];
+            }
 
             bool ok = true;
             for (auto [trans, ele] : Scores) {
-                if (trans > PredictedScore.first && ele > PredictedScore.second - GridSumBuy - 3 * 50 * 1'000 * WeatherChanges.size()) {
+                if (trans > PredictedScore.first && ele > PredictedScore.second - sumBuy - 3 * 50 * 1'000 * WeatherChanges.size()) {
                     ok = false;
                     break;
                 }
             }
 
             if (!ok) {
+                cerr << tm << ": " << "!ok" << endl;
+
                 for (auto t : EvsQueue) {
                     EvsChargeQueue.insert(t);
                 }
@@ -1221,7 +1234,7 @@ public:
 
             if (buy > 0 && excess > 0) {
                 cerr << "buy > 0 && excess > 0" << endl;
-                //throw 1;
+                throw 1;
             }
 
             losses[qtm] = -buy + excess;
@@ -1439,7 +1452,7 @@ public:
                     deltaTm = aTm - tm;
                 }
 
-                i64 chargeAvailable = chargeNeeded < 0 ? evCharge - EV.Delta_EV_move : EV.C_EV_max - evCharge;
+                i64 chargeAvailable = chargeNeeded < 0 ? evCharge : EV.C_EV_max - evCharge;
 
                 if (chargeNeeded < 0) {
                     chargeNeeded = -min(-chargeNeeded, chargeAvailable);
@@ -1455,7 +1468,7 @@ public:
 
                 i64 sumLen = aGridId < 0 ? gs.len[ev.u][grid_i.x[gridId]] : gs.len[ev.u][grid_i.x[aGridId]] + gs.len[grid_i.x[aGridId]][grid_i.x[gridId]];
 
-                double val = -sumLen * EV.Delta_EV_move + 2.0 * (etalonBuy - buy) + (etalonExcess - excess);
+                double val = -sumLen * EV.Delta_EV_move + gamma * (etalonBuy - buy) + (etalonExcess - excess);
                 val *= 10;
 
                 if (grid.DayType == 3) {
@@ -1585,15 +1598,22 @@ public:
 
 public:
     void command(const grid_info& grid_i, const EV_info& ev_i, const order_info& order_i) {
-        if (tm) {
+        if (!tm) {
+            cerr << tt << ": " << EvLimit << "/" << EV.N_EV << endl;
         }
+
+        if (tm) {
+            DetectWeatherChange(grid_i);
+        }
+
+        PreUpdate(grid_i, ev_i, order_i);
 
         ConstructMappings(grid_i, order_i);
 
         if (!tm) {
             MatchEvsToGrid(grid_i, ev_i);
         }
-        ConstructEvsQueues(ev_i, grid_i);
+        ConstructEvsQueues(ev_i);
 
         UpdateOrdersState(ev_i, order_i);
         AssignOrders(ev_i, order_i);
@@ -2001,7 +2021,7 @@ void CalculateBestSuite(const vector<pair<pair<double, double>, i64>>& scores, c
 int main() {
     setbuf(stderr, nullptr);
     bool isA = false;
-    bool dump = true;
+    bool dump = false;
 
     i64 N_solution = 1;
     if (!isA) {
@@ -2033,12 +2053,14 @@ int main() {
     double predictedBestScore = 0.0;
     vector<pair<pair<double, double>, i64>> predictedScores;
 
+
+
     if (!isA) {
         BestSuite.resize(5);
 
         map<i64, pair<i64, i64>> orders;
         if (true) {
-            mt19937 rng((unsigned int)chrono::steady_clock::now().time_since_epoch().count());
+            mt19937 rng((unsigned int)(chrono::steady_clock::now().time_since_epoch().count()));
             uniform_int_distribution<i64> dist(0ll, std::numeric_limits<i64>::max());
 
 
@@ -2099,7 +2121,6 @@ int main() {
     }
 
     for (i64 n = 0; n < N_solution; ++n) {
-
         if (!predictedScores.empty() && !isA) {
             vector<i64> curSuite;
             predictedBestScore = 0.0;
